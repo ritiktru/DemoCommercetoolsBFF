@@ -1,0 +1,880 @@
+{
+  "recordCount": 10,
+  "reportedSearchTotal": 8652,
+  "uniqueArticles": 4,
+  "uniqueArticleUomPairs": 4,
+  "storeIds": [
+    "0320",
+    "3859",
+    "8247",
+    "8468",
+    "8954",
+    "9508"
+  ],
+  "attributeCount": 64,
+  "mapping": [
+    {
+      "source": "articleNumber",
+      "attribute": "pace-articleNumber",
+      "type": {
+        "name": "text"
+      },
+      "required": true
+    },
+    {
+      "source": "uom",
+      "attribute": "pace-uom",
+      "type": {
+        "name": "text"
+      },
+      "required": true
+    },
+    {
+      "source": "brand",
+      "attribute": "pace-brand",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "upc",
+      "attribute": "pace-upc",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "storageInstructions",
+      "attribute": "pace-storageInstructions",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "countryOfOrigin",
+      "attribute": "pace-countryOfOrigin",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "weight",
+      "attribute": "pace-weight",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "itemAmountUnit",
+      "attribute": "pace-itemAmountUnit",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "itemAmountValue",
+      "attribute": "pace-itemAmountValue",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "priceQuantity",
+      "attribute": "pace-priceQuantity",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "catchWeightMin",
+      "attribute": "pace-catchWeightMin",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "catchWeightMax",
+      "attribute": "pace-catchWeightMax",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "productOfCanada",
+      "attribute": "pace-productOfCanada",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "keywords",
+      "attribute": "pace-keywords",
+      "type": {
+        "name": "set",
+        "elementType": {
+          "name": "text"
+        }
+      },
+      "required": false
+    },
+    {
+      "source": "numberOfItemsInPack",
+      "attribute": "pace-numberOfItemsInPack",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "seasonedRequired",
+      "attribute": "pace-seasonedRequired",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.alcohol",
+      "attribute": "pace-allergens-alcohol",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.eggFree",
+      "attribute": "pace-allergens-eggFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.glutenFree",
+      "attribute": "pace-allergens-glutenFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.halal",
+      "attribute": "pace-allergens-halal",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.kosher",
+      "attribute": "pace-allergens-kosher",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.lactoseFree",
+      "attribute": "pace-allergens-lactoseFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.milkFree",
+      "attribute": "pace-allergens-milkFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.mustardFree",
+      "attribute": "pace-allergens-mustardFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.nutFree",
+      "attribute": "pace-allergens-nutFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.oatFree",
+      "attribute": "pace-allergens-oatFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.organic",
+      "attribute": "pace-allergens-organic",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.peanutFree",
+      "attribute": "pace-allergens-peanutFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.sesameFree",
+      "attribute": "pace-allergens-sesameFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.shellfishFree",
+      "attribute": "pace-allergens-shellfishFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.soyaFree",
+      "attribute": "pace-allergens-soyaFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.sulphitesFree",
+      "attribute": "pace-allergens-sulphitesFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.tobacco",
+      "attribute": "pace-allergens-tobacco",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.vegan",
+      "attribute": "pace-allergens-vegan",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.vegetarian",
+      "attribute": "pace-allergens-vegetarian",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "allergens.wheatFree",
+      "attribute": "pace-allergens-wheatFree",
+      "type": {
+        "name": "boolean"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.caloriesRoundedOffValue",
+      "attribute": "pace-nutrition-caloriesRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.carbohydratesRoundedOffValue",
+      "attribute": "pace-nutrition-carbohydratesRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.cholesterolRoundedOffValue",
+      "attribute": "pace-nutrition-cholesterolRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.fatRoundedOffValue",
+      "attribute": "pace-nutrition-fatRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.fatValuePercentage",
+      "attribute": "pace-nutrition-fatValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.fibreRoundedOffValue",
+      "attribute": "pace-nutrition-fibreRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.fibreValuePercentage",
+      "attribute": "pace-nutrition-fibreValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.householdUOM",
+      "attribute": "pace-nutrition-householdUOM",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.ingredients",
+      "attribute": "pace-nutrition-ingredients",
+      "type": {
+        "name": "set",
+        "elementType": {
+          "name": "text"
+        }
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.omega3PublishNutritional",
+      "attribute": "pace-nutrition-omega3PublishNutritional",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.omega6PublishNutritional",
+      "attribute": "pace-nutrition-omega6PublishNutritional",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.potassiumRoundedOffValue",
+      "attribute": "pace-nutrition-potassiumRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.potassiumValuePercentage",
+      "attribute": "pace-nutrition-potassiumValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.proteinRoundedOffValue",
+      "attribute": "pace-nutrition-proteinRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.saturatedAndTransFatRoundedOffValue",
+      "attribute": "pace-nutrition-saturatedAndTransFatRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.saturatedAndTransFatValuePercentage",
+      "attribute": "pace-nutrition-saturatedAndTransFatValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.saturatedFatRoundedOffValue",
+      "attribute": "pace-nutrition-saturatedFatRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.servingSize",
+      "attribute": "pace-nutrition-servingSize",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.servingUOM",
+      "attribute": "pace-nutrition-servingUOM",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.sobeysMayContain",
+      "attribute": "pace-nutrition-sobeysMayContain",
+      "type": {
+        "name": "text"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.sodiumRoundedOffValue",
+      "attribute": "pace-nutrition-sodiumRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.sodiumValuePercentage",
+      "attribute": "pace-nutrition-sodiumValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.sugarAlcoholRoundedOffValue",
+      "attribute": "pace-nutrition-sugarAlcoholRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.sugarRoundedOffValue",
+      "attribute": "pace-nutrition-sugarRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.sugarValuePercentage",
+      "attribute": "pace-nutrition-sugarValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.transFatRoundedOffValue",
+      "attribute": "pace-nutrition-transFatRoundedOffValue",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.vitaminAValuePercentage",
+      "attribute": "pace-nutrition-vitaminAValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    },
+    {
+      "source": "nutritionalInformation.vitaminCValuePercentage",
+      "attribute": "pace-nutrition-vitaminCValuePercentage",
+      "type": {
+        "name": "number"
+      },
+      "required": false
+    }
+  ],
+  "deferredNullOnlyNutritionFields": [
+    "nutritionalInformation.calciumRoundedOffValue",
+    "nutritionalInformation.calciumValuePercentage",
+    "nutritionalInformation.carbohydratesValuePercentage",
+    "nutritionalInformation.cholesterolValuePercentage",
+    "nutritionalInformation.householdMeasureQuantity",
+    "nutritionalInformation.ironRoundedOffValue",
+    "nutritionalInformation.ironValuePercentage",
+    "nutritionalInformation.metricServingSizeRoundedOffValue",
+    "nutritionalInformation.polyunsaturatedPublishNutritional",
+    "nutritionalInformation.proteinValuePercentage",
+    "nutritionalInformation.saturatedFatValuePercentage"
+  ],
+  "topLevelFieldProfile": {
+    "activePromotion": {
+      "present": 10,
+      "types": [
+        "bool"
+      ]
+    },
+    "allergens": {
+      "present": 10,
+      "types": [
+        "dict"
+      ]
+    },
+    "articleNumber": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "brand": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "catchWeightMax": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "catchWeightMin": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "categories": {
+      "present": 10,
+      "types": [
+        "list"
+      ]
+    },
+    "channel": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "countryOfOrigin": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "createdAt": {
+      "present": 10,
+      "types": [
+        "int"
+      ]
+    },
+    "description": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "discount": {
+      "present": 3,
+      "types": [
+        "int"
+      ]
+    },
+    "discountType": {
+      "present": 3,
+      "types": [
+        "str"
+      ]
+    },
+    "durableLifeCustomerShelfLife": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "gtin": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "hierarchicalCategories": {
+      "present": 10,
+      "types": [
+        "dict"
+      ]
+    },
+    "images": {
+      "present": 10,
+      "types": [
+        "list"
+      ]
+    },
+    "inStock": {
+      "present": 10,
+      "types": [
+        "bool"
+      ]
+    },
+    "inventoryLevel": {
+      "present": 10,
+      "types": [
+        "int"
+      ]
+    },
+    "isMassOffers": {
+      "present": 10,
+      "types": [
+        "bool"
+      ]
+    },
+    "isVisible": {
+      "present": 10,
+      "types": [
+        "bool"
+      ]
+    },
+    "itemAmountUnit": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "itemAmountValue": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "itemPackCount": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "keywords": {
+      "present": 10,
+      "types": [
+        "list"
+      ]
+    },
+    "linkedItems": {
+      "present": 3,
+      "types": [
+        "list"
+      ]
+    },
+    "linkeditem": {
+      "present": 3,
+      "types": [
+        "bool"
+      ]
+    },
+    "milkFatContentPercentageConcat": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "milkFatContentRoundedOffPercentage": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "moistureContentPercentageConcat": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "moistureContentRoundedOffPercentage": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "monounsaturatedPublishNutritional": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "name": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "numberOfItemsInPack": {
+      "present": 10,
+      "types": [
+        "int"
+      ]
+    },
+    "nutritionalInformation": {
+      "present": 10,
+      "types": [
+        "dict"
+      ]
+    },
+    "objectID": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "pageSlug": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "persoOffer": {
+      "present": 6,
+      "types": [
+        "list"
+      ]
+    },
+    "price": {
+      "present": 10,
+      "types": [
+        "float"
+      ]
+    },
+    "priceQuantity": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "productOfCanada": {
+      "present": 10,
+      "types": [
+        "bool"
+      ]
+    },
+    "promotions": {
+      "present": 10,
+      "types": [
+        "list"
+      ]
+    },
+    "scaleLabelFixedWeight": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "scaleLabelFixedWeightConcat": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "scaleLabelFixedWeightUOM": {
+      "present": 10,
+      "types": [
+        "NoneType"
+      ]
+    },
+    "scenePlusPoints": {
+      "present": 10,
+      "types": [
+        "int"
+      ]
+    },
+    "seasonedRequired": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "slugTranslation": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "storageInstructions": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "storeId": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "taxes": {
+      "present": 10,
+      "types": [
+        "list"
+      ]
+    },
+    "uom": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "upc": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    },
+    "updatedAt": {
+      "present": 10,
+      "types": [
+        "int"
+      ]
+    },
+    "weight": {
+      "present": 10,
+      "types": [
+        "str"
+      ]
+    }
+  }
+}

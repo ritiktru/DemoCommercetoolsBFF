@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "purpose": "POC assortments using the effective Store mapping for the ten PACE search hits",
+  "selections": [
+    { "storeKey": "sobeys-0320", "key": "sobeys-0320-assortment", "name": "Sobeys Torbay Road POC Assortment", "productKeys": ["953758", "723345"] },
+    { "storeKey": "sobeys-4016", "key": "sobeys-4016-assortment", "name": "Sobeys March Road POC Assortment", "productKeys": ["680705", "953758", "953787"] },
+    { "storeKey": "sobeys-0520", "key": "sobeys-0520-assortment", "name": "Sobeys Shelburne POC Assortment", "productKeys": ["953758", "680705"] },
+    { "storeKey": "sobeys-0870", "key": "sobeys-0870-assortment", "name": "Sobeys University Avenue POC Assortment", "productKeys": ["680705"] },
+    { "storeKey": "sobeys-0704", "key": "sobeys-0704-assortment", "name": "Sobeys Port Hawkesbury POC Assortment", "productKeys": ["953758"] },
+    { "storeKey": "sobeys-6715", "key": "sobeys-6715-assortment", "name": "Sobeys Fonthill POC Assortment", "productKeys": ["680705"] }
+  ]
+}

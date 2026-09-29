@@ -1,0 +1,845 @@
+{
+  "key": "sobeys-pace-product-v1",
+  "name": "Sobeys PACE Product v1",
+  "description": "POC product variant attributes based on the supplied PACE search export. Store pricing, stock, promotions and tax rules are separate resources.",
+  "attributes": [
+    {
+      "name": "pace-articleNumber",
+      "label": {
+        "en": "articleNumber"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": true,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-uom",
+      "label": {
+        "en": "uom"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": true,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-brand",
+      "label": {
+        "en": "brand"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-upc",
+      "label": {
+        "en": "upc"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-storageInstructions",
+      "label": {
+        "en": "storageInstructions"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-countryOfOrigin",
+      "label": {
+        "en": "countryOfOrigin"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-weight",
+      "label": {
+        "en": "weight"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-itemAmountUnit",
+      "label": {
+        "en": "itemAmountUnit"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-itemAmountValue",
+      "label": {
+        "en": "itemAmountValue"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-priceQuantity",
+      "label": {
+        "en": "priceQuantity"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-catchWeightMin",
+      "label": {
+        "en": "catchWeightMin"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-catchWeightMax",
+      "label": {
+        "en": "catchWeightMax"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-productOfCanada",
+      "label": {
+        "en": "productOfCanada"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-keywords",
+      "label": {
+        "en": "keywords"
+      },
+      "type": {
+        "name": "set",
+        "elementType": {
+          "name": "text"
+        }
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-numberOfItemsInPack",
+      "label": {
+        "en": "numberOfItemsInPack"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-seasonedRequired",
+      "label": {
+        "en": "seasonedRequired"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-alcohol",
+      "label": {
+        "en": "allergens.alcohol"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-eggFree",
+      "label": {
+        "en": "allergens.eggFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-glutenFree",
+      "label": {
+        "en": "allergens.glutenFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-halal",
+      "label": {
+        "en": "allergens.halal"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-kosher",
+      "label": {
+        "en": "allergens.kosher"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-lactoseFree",
+      "label": {
+        "en": "allergens.lactoseFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-milkFree",
+      "label": {
+        "en": "allergens.milkFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-mustardFree",
+      "label": {
+        "en": "allergens.mustardFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-nutFree",
+      "label": {
+        "en": "allergens.nutFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-oatFree",
+      "label": {
+        "en": "allergens.oatFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-organic",
+      "label": {
+        "en": "allergens.organic"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-peanutFree",
+      "label": {
+        "en": "allergens.peanutFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-sesameFree",
+      "label": {
+        "en": "allergens.sesameFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-shellfishFree",
+      "label": {
+        "en": "allergens.shellfishFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-soyaFree",
+      "label": {
+        "en": "allergens.soyaFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-sulphitesFree",
+      "label": {
+        "en": "allergens.sulphitesFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-tobacco",
+      "label": {
+        "en": "allergens.tobacco"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-vegan",
+      "label": {
+        "en": "allergens.vegan"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-vegetarian",
+      "label": {
+        "en": "allergens.vegetarian"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-allergens-wheatFree",
+      "label": {
+        "en": "allergens.wheatFree"
+      },
+      "type": {
+        "name": "boolean"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": true,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-caloriesRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.caloriesRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-carbohydratesRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.carbohydratesRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-cholesterolRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.cholesterolRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-fatRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.fatRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-fatValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.fatValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-fibreRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.fibreRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-fibreValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.fibreValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-householdUOM",
+      "label": {
+        "en": "nutritionalInformation.householdUOM"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-ingredients",
+      "label": {
+        "en": "nutritionalInformation.ingredients"
+      },
+      "type": {
+        "name": "set",
+        "elementType": {
+          "name": "text"
+        }
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-omega3PublishNutritional",
+      "label": {
+        "en": "nutritionalInformation.omega3PublishNutritional"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-omega6PublishNutritional",
+      "label": {
+        "en": "nutritionalInformation.omega6PublishNutritional"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-potassiumRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.potassiumRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-potassiumValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.potassiumValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-proteinRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.proteinRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-saturatedAndTransFatRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.saturatedAndTransFatRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-saturatedAndTransFatValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.saturatedAndTransFatValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-saturatedFatRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.saturatedFatRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-servingSize",
+      "label": {
+        "en": "nutritionalInformation.servingSize"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-servingUOM",
+      "label": {
+        "en": "nutritionalInformation.servingUOM"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-sobeysMayContain",
+      "label": {
+        "en": "nutritionalInformation.sobeysMayContain"
+      },
+      "type": {
+        "name": "text"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-sodiumRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.sodiumRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-sodiumValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.sodiumValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-sugarAlcoholRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.sugarAlcoholRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-sugarRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.sugarRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-sugarValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.sugarValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-transFatRoundedOffValue",
+      "label": {
+        "en": "nutritionalInformation.transFatRoundedOffValue"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-vitaminAValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.vitaminAValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    },
+    {
+      "name": "pace-nutrition-vitaminCValuePercentage",
+      "label": {
+        "en": "nutritionalInformation.vitaminCValuePercentage"
+      },
+      "type": {
+        "name": "number"
+      },
+      "isRequired": false,
+      "attributeConstraint": "None",
+      "isSearchable": false,
+      "level": "Variant"
+    }
+  ]
+}

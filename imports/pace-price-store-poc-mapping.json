@@ -1,0 +1,31 @@
+{
+  "purpose": "POC only - random deterministic mapping for missing PACE store IDs",
+  "seed": 20260923,
+  "mapping": {
+    "3859": {
+      "mappedStoreNumber": "0704",
+      "mappedStoreName": "Sobeys Port Hawkesbury",
+      "channelKey": "sobeys-0704-channel"
+    },
+    "8247": {
+      "mappedStoreNumber": "0520",
+      "mappedStoreName": "Sobeys Shelburne",
+      "channelKey": "sobeys-0520-channel"
+    },
+    "8468": {
+      "mappedStoreNumber": "6715",
+      "mappedStoreName": "Sobeys Fonthill",
+      "channelKey": "sobeys-6715-channel"
+    },
+    "8954": {
+      "mappedStoreNumber": "0870",
+      "mappedStoreName": "Sobeys University Avenue",
+      "channelKey": "sobeys-0870-channel"
+    },
+    "9508": {
+      "mappedStoreNumber": "4016",
+      "mappedStoreName": "Sobeys March Road",
+      "channelKey": "sobeys-4016-channel"
+    }
+  }
+}
