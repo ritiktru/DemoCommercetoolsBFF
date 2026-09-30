@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
-import { PERCENT_DISCOUNT_CODE,PERCENT_DISCOUNT,FLAT_DISCOUNT_CODE,FLAT_DISCOUNT_CENTS, FREE_SHIPPING_CODE, storeKeySchema, type AddItemInput, type CheckoutAddressInput,type RemoveDiscountInput, type ApplyDiscountInput, type StorefrontService } from './storefront/storefront.js';
+import { PERCENT_DISCOUNT_CODE,PERCENT_DISCOUNT,FLAT_DISCOUNT_CODE,FLAT_DISCOUNT_CENTS, FREE_SHIPPING_CODE, storeKeySchema, type AddItemInput,type UpdateItemInput, type CheckoutAddressInput,type RemoveDiscountInput, type ApplyDiscountInput, type StorefrontService } from './storefront/storefront.js';
 
 export const customerInput = z.strictObject({
   email: z.email().max(254),
@@ -177,6 +177,27 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: input.version, actions: [{ action: 'addLineItem', sku: input.sku, quantity: input.quantity, distributionChannel: { typeId: 'channel', key: `${storeKey}-channel` }, supplyChannel: { typeId: 'channel', key: `${storeKey}-channel` } }] }) });
     await this.checkCartResponse(response); return { cart: cartSchema.parse(await response.json()) };
   }
+
+  async updateStoreCartItem(storeKey: string, input: UpdateItemInput, customer?: SessionCustomer) {
+  const { cart } = await this.getCheckoutCart(storeKey, input.cartId, customer);
+  if (cart.version !== input.version) {
+    throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
+  }
+  const line = cart.lineItems.find(item => item.id === input.lineItemId);
+  if (!line) throw new CommerceError(404, 'LineItemNotFound', 'Item not found in cart');
+
+  const action =
+    input.quantity === 0
+      ? { action: 'removeLineItem', lineItemId: input.lineItemId }
+      : { action: 'changeLineItemQuantity', lineItemId: input.lineItemId, quantity: input.quantity };
+
+  const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ version: cart.version, actions: [action] }),
+  });
+  await this.checkCartResponse(response);
+  return { cart: cartSchema.parse(await response.json()) };
+}
 
   private async getCheckoutCart(storeKey: string, cartId: string, customer?: SessionCustomer) {
     const response = await this.commerce(`/carts/${encodeURIComponent(cartId)}`);

@@ -188,6 +188,37 @@ export default function Home() {
     }
   }
 
+  async function setQty(lineItemId: string, quantity: number) {
+    if (!cart) return;
+    setBusy(true);
+    try {
+      const data = await api(`/api/storefront/stores/${storeKey}/cart-items/update`, {
+        method: 'POST',
+        body: JSON.stringify({
+          cartId: cart.id,
+          version: cart.version,
+          lineItemId,
+          quantity,
+        }),
+      });
+      setCart(data.cart);
+      if (!data.cart.lineItems.length) {
+        setShowCheckout(false);
+        setShippingMethods([]);
+        setShippingMethodId('');
+      }
+      setStatus(quantity === 0 ? 'Item removed.' : 'Quantity updated.');
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function lineFor(product: Product) {
+    return cart?.lineItems.find(item => item.variant.sku === product.sku);
+  }
+
   function updateAddress(field: keyof Address, value: string) {
     setAddress(previous => ({ ...previous, [field]: value }));
   }
@@ -283,38 +314,38 @@ export default function Home() {
     }
   }
 
-async function applyFreeShipping() {
-  if (!cart) {
-    setStatus('Add a product and select delivery first.');
-    return;
+  async function applyFreeShipping() {
+    if (!cart) {
+      setStatus('Add a product and select delivery first.');
+      return;
+    }
+    const charge =
+      cart.shippingInfo?.price ??
+      shippingMethods.find(method => method.id === shippingMethodId)?.price;
+    if (!charge || charge.centAmount <= 0) {
+      setStatus('No shipping charge');
+      return;
+    }
+    if (freeShippingCode.trim().toUpperCase() !== DEMO_FREE_SHIP_CODE) {
+      setStatus(`Invalid code. Use ${DEMO_FREE_SHIP_CODE}.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api(`/api/storefront/stores/${storeKey}/discount`, {
+        method: 'POST',
+        body: JSON.stringify({ cartId: cart.id, version: cart.version, code: DEMO_FREE_SHIP_CODE }),
+      });
+      setCart(data.cart);
+      setFreeShippingApplied(true);
+      setFreeShippingCode('');
+      setStatus(`${DEMO_FREE_SHIP_CODE} applied. Shipping $0.`);
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
-  const charge =
-    cart.shippingInfo?.price ??
-    shippingMethods.find(method => method.id === shippingMethodId)?.price;
-  if (!charge || charge.centAmount <= 0) {
-    setStatus('No shipping charge');
-    return;
-  }
-  if (freeShippingCode.trim().toUpperCase() !== DEMO_FREE_SHIP_CODE) {
-    setStatus(`Invalid code. Use ${DEMO_FREE_SHIP_CODE}.`);
-    return;
-  }
-  setBusy(true);
-  try {
-    const data = await api(`/api/storefront/stores/${storeKey}/discount`, {
-      method: 'POST',
-      body: JSON.stringify({ cartId: cart.id, version: cart.version, code: DEMO_FREE_SHIP_CODE }),
-    });
-    setCart(data.cart);
-    setFreeShippingApplied(true);
-    setFreeShippingCode('');
-    setStatus(`${DEMO_FREE_SHIP_CODE} applied. Shipping $0.`);
-  } catch (error) {
-    setStatus((error as Error).message);
-  } finally {
-    setBusy(false);
-  }
-}
 
   async function removeFreeShipping() {
     if (!cart) return;
@@ -375,23 +406,23 @@ async function applyFreeShipping() {
   }
 
   const selectedShipping = shippingMethods.find(method => method.id === shippingMethodId);
-const itemsTotal = cart
-  ? {
+  const itemsTotal = cart
+    ? {
       currencyCode: cart.totalPrice.currencyCode,
       centAmount: cart.lineItems.reduce((sum, item) => sum + item.totalPrice.centAmount, 0),
     }
-  : undefined;
-const listedShipping = cart?.shippingInfo?.price ?? selectedShipping?.price;
-const shippingCharge = {
-  currencyCode: cart?.totalPrice.currencyCode ?? 'CAD',
-  centAmount: freeShippingApplied ? 0 : (listedShipping?.centAmount ?? 0),
-};
-const displayTotal = itemsTotal
-  ? {
+    : undefined;
+  const listedShipping = cart?.shippingInfo?.price ?? selectedShipping?.price;
+  const shippingCharge = {
+    currencyCode: cart?.totalPrice.currencyCode ?? 'CAD',
+    centAmount: freeShippingApplied ? 0 : (listedShipping?.centAmount ?? 0),
+  };
+  const displayTotal = itemsTotal
+    ? {
       currencyCode: itemsTotal.currencyCode,
       centAmount: itemsTotal.centAmount + shippingCharge.centAmount,
     }
-  : undefined;
+    : undefined;
 
   return (
     <main>
@@ -445,9 +476,15 @@ const displayTotal = itemsTotal
                 <p className="sku">SKU {product.sku}</p>
                 <div className="productFooter">
                   <strong>{money(product.price)}</strong>
-                  <button disabled={!product.price || busy} onClick={() => add(product)}>
-                    Add
-                  </button>
+                  {lineFor(product) ? (
+                    <div className="qtyStepper">
+                      <button type="button" disabled={busy} onClick={() => void setQty(lineFor(product)!.id, lineFor(product)!.quantity - 1)}>−</button>
+                      <span>{lineFor(product)!.quantity}</span>
+                      <button type="button" disabled={busy} onClick={() => void setQty(lineFor(product)!.id, lineFor(product)!.quantity + 1)}>+</button>
+                    </div>
+                  ) : (
+                    <button disabled={!product.price || busy} onClick={() => add(product)}>Add</button>
+                  )}
                 </div>
               </article>
             ))}
@@ -522,42 +559,42 @@ const displayTotal = itemsTotal
                   </button>
                 </div>
               </form>
-{(listedShipping?.centAmount ?? 0) <= 0 && !freeShippingApplied ? (
-  <p className="status">No shipping charge</p>
-) : freeShippingApplied ? (
-  <div className="cartItem">
-    <div>
-      <strong>{DEMO_FREE_SHIP_CODE}</strong>
-      <small>Shipping $0.00</small>
-    </div>
-    <button type="button" disabled={busy} onClick={removeFreeShipping}>
-      Remove
-    </button>
-  </div>
-) : (
-  <form
-    className="checkoutForm"
-    onSubmit={event => {
-      event.preventDefault();
-      void applyFreeShipping();
-    }}
-  >
-    <label>
-      Free shipping code
-      <input
-        value={freeShippingCode}
-        onChange={event => setFreeShippingCode(event.target.value)}
-        placeholder={DEMO_FREE_SHIP_CODE}
-        autoComplete="off"
-      />
-    </label>
-    <div className="checkoutActions">
-      <button disabled={busy || !freeShippingCode.trim()} type="submit">
-        Apply code
-      </button>
-    </div>
-  </form>
-)}
+              {(listedShipping?.centAmount ?? 0) <= 0 && !freeShippingApplied ? (
+                <p className="status">No shipping charge</p>
+              ) : freeShippingApplied ? (
+                <div className="cartItem">
+                  <div>
+                    <strong>{DEMO_FREE_SHIP_CODE}</strong>
+                    <small>Shipping $0.00</small>
+                  </div>
+                  <button type="button" disabled={busy} onClick={removeFreeShipping}>
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <form
+                  className="checkoutForm"
+                  onSubmit={event => {
+                    event.preventDefault();
+                    void applyFreeShipping();
+                  }}
+                >
+                  <label>
+                    Free shipping code
+                    <input
+                      value={freeShippingCode}
+                      onChange={event => setFreeShippingCode(event.target.value)}
+                      placeholder={DEMO_FREE_SHIP_CODE}
+                      autoComplete="off"
+                    />
+                  </label>
+                  <div className="checkoutActions">
+                    <button disabled={busy || !freeShippingCode.trim()} type="submit">
+                      Apply code
+                    </button>
+                  </div>
+                </form>
+              )}
               <button className="checkoutButton" disabled={busy} onClick={() => setShowCheckout(true)}>
                 Checkout
               </button>

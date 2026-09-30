@@ -35,11 +35,19 @@ export const checkoutAddressInput = z.strictObject({
   }),
 });
 export type CheckoutAddressInput = z.infer<typeof checkoutAddressInput>;
+export const updateItemInput = z.strictObject({
+  cartId: z.uuid(),
+  version: z.number().int().positive(),
+  lineItemId: z.string().min(1),
+  quantity: z.number().int().min(0).max(99),
+});
+export type UpdateItemInput = z.infer<typeof updateItemInput>;
 export interface StorefrontService {
   listStores(): Promise<unknown>;
   listStoreProducts(storeKey: string): Promise<unknown>;
   createStoreCart(storeKey: string, customer?: SessionCustomer): Promise<unknown>;
   addStoreCartItem(storeKey: string, input: AddItemInput, customer?: SessionCustomer): Promise<unknown>;
+  updateStoreCartItem(storeKey: string, input: UpdateItemInput, customer?: SessionCustomer): Promise<unknown>;
   applyStoreCartDiscount(storeKey: string, input: ApplyDiscountInput, customer?: SessionCustomer): Promise<unknown>;
   removeStoreCartDiscount(storeKey: string, input: RemoveDiscountInput, customer?: SessionCustomer): Promise<unknown>;
   setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer): Promise<unknown>;

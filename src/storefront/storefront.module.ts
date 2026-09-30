@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { AuthService, OriginGuard } from '../auth.js';
 import { CommerceError } from '../commercetools.js';
-import { applyDiscountInput, removeDiscountInput, addItemInput, checkoutAddressInput, storeKeySchema, type StorefrontService } from './storefront.js';
+import { applyDiscountInput, removeDiscountInput, addItemInput,updateItemInput, checkoutAddressInput, storeKeySchema, type StorefrontService } from './storefront.js';
 
 const SERVICE = Symbol('STOREFRONT_SERVICE');
 
@@ -52,6 +52,16 @@ export class StorefrontController {
     if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
     return this.storefront.createCheckoutSession(key.data, input.data.cartId, this.optionalCustomer(req));
+  }
+
+  @Post('stores/:storeKey/cart-items/update')
+  @UseGuards(OriginGuard)
+  updateItem(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw);
+    const input = updateItemInput.safeParse(body);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide cartId, version, lineItemId, and quantity');
+    return this.storefront.updateStoreCartItem(key.data, input.data, this.optionalCustomer(req));
   }
 
   @Post('stores/:storeKey/checkout-address')
