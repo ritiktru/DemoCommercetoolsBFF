@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ClientBuilder, type TokenStore } from '@commercetools/sdk-client-v2';
 import { createApiBuilderFromCtpClient, type CartUpdateAction, type ClientResponse, type CustomerDraft } from '@commercetools/platform-sdk';
 import type { Config } from './config.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
@@ -277,6 +277,18 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { cart: cartSchema.parse(await this.postCart(cartId, cart.version, [{ action: 'setShippingMethod', shippingMethod: { typeId: 'shipping-method', id: shippingMethodId } }])) };
   }
 
+  // Saves the cart as a commercetools Order with no payment taken; the order is then managed in commercetools.
+  async placeOrder(storeKey: string, cartId: string, customer?: SessionCustomer) {
+    const { cart, raw } = await this.getCheckoutCart(storeKey, cartId, customer);
+    if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add at least one product before checkout');
+    if (!raw.shippingAddress || !raw.shippingInfo) throw new CommerceError(400, 'CheckoutNotReady', 'Enter an address and select a delivery method before placing the order');
+    const order = await this.ct(this.api.orders().post({ body: { id: cartId, version: cart.version, orderNumber: `SO-${randomBytes(5).toString('hex').toUpperCase()}` } }), (status, error) =>
+      status === 409 ? new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again')
+        : status === 429 ? new CommerceError(503, 'CommerceBusy', 'Commerce service is busy; try again later')
+        : new CommerceError(502, 'OrderFailed', `Unable to place order${codesOf(error).length ? `: ${codesOf(error).join(', ')}` : ''}`));
+    return { order: { id: order.id, orderNumber: order.orderNumber, totalPrice: order.taxedPrice?.totalGross ?? order.totalPrice } };
+  }
+
   async createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer) {
     if (!this.config.CT_CHECKOUT_SESSION_URL || !this.config.CT_CHECKOUT_APPLICATION_KEY) {
       throw new CommerceError(503, 'CheckoutNotConfigured', 'Set CT_CHECKOUT_SESSION_URL and CT_CHECKOUT_APPLICATION_KEY');
@@ -337,11 +349,25 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   }
 
   async loginCustomer(email: string, password: string): Promise<CustomerResult> {
-    return customerResult.parse(await this.ct(this.api.login().post({ body: { email: email.toLowerCase(), password } }), (status, error) => {
+    email = email.toLowerCase();
+    const fail = (status: number, error: unknown) => {
+      console.error(`[login] commercetools rejected sign-in: status=${status} codes=${codesOf(error).join(',') || 'none'}`);
       if (codesOf(error).includes('InvalidCredentials')) return new CommerceError(401, 'InvalidCredentials', 'Email or password is incorrect');
       if (status === 429) return new CommerceError(503, 'CommerceBusy', 'Commerce service is busy; try again later');
       return new CommerceError(502, 'CommerceRequestFailed', 'Unable to sign in');
-    }));
+    };
+    try { return customerResult.parse(await this.ct(this.api.login().post({ body: { email, password } }), fail)); }
+    catch (error) {
+      if ((error as CommerceError).code !== 'InvalidCredentials') throw error;
+      // Checkout adds the customer to a Store (createStoreCart). commercetools rejects the global /login for
+      // Store-scoped customers, so retry through each of their Stores before reporting bad credentials.
+      const found = await this.ct(this.api.customers().get({ queryArgs: { where: `email=${JSON.stringify(email)}`, limit: 1 } }), failWith('Unable to sign in'));
+      for (const store of found.results[0]?.stores ?? []) {
+        try { return customerResult.parse(await this.ct(this.store(store.key).login().post({ body: { email, password } }), fail)); }
+        catch (storeError) { if ((storeError as CommerceError).code !== 'InvalidCredentials') throw storeError; }
+      }
+      throw error;
+    }
   }
 
   private async findCustomer(field: 'key' | 'email', value: string): Promise<z.infer<typeof customerSchema> | undefined> {

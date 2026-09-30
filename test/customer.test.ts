@@ -96,3 +96,19 @@ test('configuration errors expose field names only', () => {
     return true;
   });
 });
+
+test('login falls back to the customer Store when global sign-in rejects a Store-scoped customer', async () => {
+  const urls: string[] = [];
+  const fetcher: typeof fetch = async url => {
+    const path = new URL(String(url)).pathname; urls.push(path);
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    if (path.endsWith('/oauth/token')) return json(200, { access_token: 't', expires_in: 3600, token_type: 'Bearer' });
+    if (path === '/test-project/login') return json(400, { statusCode: 400, errors: [{ code: 'InvalidCredentials', message: 'x' }] });
+    if (path === '/test-project/customers') return json(200, { results: [{ stores: [{ typeId: 'store', key: 'store-1' }] }] });
+    if (path === '/test-project/in-store/key=store-1/login') return json(200, { customer: { ...customer, authenticationMode: 'Password' } });
+    return json(500, {});
+  };
+  const result = await new CommercetoolsClient(config, fetcher).loginCustomer('Person@Example.com', 'Passw0rd!x');
+  assert.equal(result.customer.id, 'customer-1');
+  assert.ok(urls.includes('/test-project/in-store/key=store-1/login'));
+});

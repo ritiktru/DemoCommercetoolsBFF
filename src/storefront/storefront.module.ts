@@ -67,6 +67,13 @@ export class StorefrontController {
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
     return this.storefront.createCheckoutSession(key.data, input.data.cartId, this.optionalCustomer(req));
   }
+  @Post('stores/:storeKey/orders') @UseGuards(OriginGuard)
+  placeOrder(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const input = z.strictObject({ cartId: z.uuid() }).safeParse(body);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
+    return this.storefront.placeOrder(key.data, input.data.cartId, this.optionalCustomer(req));
+  }
   @Post('stores/:storeKey/checkout-address') @UseGuards(OriginGuard)
   checkoutAddress(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw); const input = checkoutAddressInput.safeParse(body);
