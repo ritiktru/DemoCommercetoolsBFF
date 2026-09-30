@@ -48,11 +48,11 @@ test('authenticated cart creation calls commercetools with session owner and can
     calls++;
     assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer fake-token');
     if (init?.method === 'POST') {
-      assert.equal(String(url), 'https://api.example.com/test-project/carts');
+      assert.equal(String(url).split('?')[0], 'https://api.example.com/test-project/carts');
       assert.deepEqual(JSON.parse(String(init.body)), { currency: 'EUR', country: 'DE', customerId: owner.id, customerEmail: owner.email });
       return Response.json({ ...cart, country: 'DE', sensitiveInternalField: 'must-be-stripped' }, { status: 201 });
     }
-    assert.equal(String(url), `https://api.example.com/test-project/carts/${cart.id}`);
+    assert.equal(String(url).split('?')[0], `https://api.example.com/test-project/carts/${cart.id}`);
     return Response.json({ ...cart, country: 'DE' });
   });
   await withApp(ct, async (base, cookie) => {

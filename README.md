@@ -189,4 +189,3 @@ Google references: [Server-side ID token verification](https://developers.google
 ## PACE Product Type importer
 
 See [catalog/README.md](catalog/README.md) for the source analysis, provisional 64-attribute Product Type, mapping decisions, and importer commands. Run `npm run catalog:product-type -- --dry-run` to validate locally or `npm run catalog:product-type -- --apply` to create the type using `.env` credentials. This imports the schema; product record import is a later step.
-# DemoCommercetoolsBFF

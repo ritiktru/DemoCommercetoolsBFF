@@ -6,3 +6,19 @@ coverage/
 .DS_Store
 storefront/AGENTS.md
 storefront/CLAUDE.md
+
+# Next.js (storefront)
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.vercel/
+
+# Env files (keep examples)
+.env
+.env.*
+!.env.example
+
+# Misc
+npm-debug.log*
+*.zip

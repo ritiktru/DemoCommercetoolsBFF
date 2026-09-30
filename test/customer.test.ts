@@ -37,7 +37,7 @@ test('creates ExternalAuth customer without password and caches OAuth token', as
     if (String(url).endsWith('/oauth/token')) {
       tokenCalls++;
       assert.equal(new Headers(init?.headers).get('Authorization'), `Basic ${Buffer.from('test-client:fake-test-secret').toString('base64')}`);
-      assert.equal(String(init?.body), 'grant_type=client_credentials&scope=manage_customers%3Atest-project');
+      assert.deepEqual(Object.fromEntries(new URLSearchParams(String(init?.body))), { grant_type: 'client_credentials', scope: 'manage_customers:test-project' });
       return Response.json({ access_token: 'fake-token', expires_in: 3600 });
     }
     customerCalls++;

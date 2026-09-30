@@ -5,18 +5,28 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { CommerceError, type CustomerResult } from './commercetools.js';
+import { CommerceError, registerInput, type CustomerResult, type RegisterInput } from './commercetools.js';
 import type { GoogleIdentity, IdentityVerifier } from './google.js';
 import { SessionStore } from './sessions.js';
 
 export interface IdentityCustomerService {
   resolveGoogleCustomer(identity: GoogleIdentity): Promise<CustomerResult>;
 }
+export interface PasswordCustomerService {
+  registerCustomer(input: RegisterInput): Promise<CustomerResult>;
+  loginCustomer(email: string, password: string): Promise<CustomerResult>;
+  createPasswordToken(email: string): Promise<string | undefined>;
+  resetPassword(token: string, newPassword: string): Promise<void>;
+}
 export interface AuthOptions {
-  clientId: string;
+  // Google sign-in is optional; email/password works without it.
+  clientId?: string;
   origin: string;
-  verifier: IdentityVerifier;
+  verifier?: IdentityVerifier;
   customers: IdentityCustomerService;
+  passwords?: PasswordCustomerService;
+  // Delivers the reset link (email provider). Absent means reset links are not delivered.
+  sendResetLink?: (email: string, link: string) => Promise<void>;
   sessions?: SessionStore;
   challenges?: SessionStore;
 }
@@ -38,6 +48,11 @@ export class AuthService {
     if (!this.options) throw new CommerceError(503, 'LoginNotConfigured', 'Set GOOGLE_CLIENT_ID in the BFF environment and restart');
     return this.options;
   }
+  private google() {
+    const options = this.configured();
+    if (!options.clientId || !options.verifier) throw new CommerceError(503, 'LoginNotConfigured', 'Set GOOGLE_CLIENT_ID in the BFF environment and restart');
+    return { clientId: options.clientId, verifier: options.verifier, customers: options.customers };
+  }
   private cookieOptions() {
     return { httpOnly: true, sameSite: 'strict' as const, secure: this.configured().origin.startsWith('https://'), path: '/api' };
   }
@@ -45,7 +60,7 @@ export class AuthService {
     if (req.get('origin') !== this.configured().origin) throw new CommerceError(403, 'InvalidOrigin', 'Login and logout must originate from the configured application');
   }
   challenge(req: Request, res: Response) {
-    const options = this.configured();
+    const options = { ...this.configured(), ...this.google() };
     if (req.get('sec-fetch-site') === 'cross-site' || (req.get('origin') && req.get('origin') !== options.origin)) {
       throw new CommerceError(403, 'InvalidOrigin', 'Use the configured application to sign in');
     }
@@ -57,8 +72,67 @@ export class AuthService {
     res.cookie('bff_login_challenge', challenge.token, { ...this.cookieOptions(), maxAge: 5 * 60 * 1000 });
     return { clientId: options.clientId, nonce };
   }
-  async login(req: Request, res: Response) {
+  private startSession(req: Request, res: Response, customer: CustomerResult['customer']) {
+    let session;
+    try { session = this.sessions.issue({ id: customer.id, email: customer.email }); }
+    catch { throw new CommerceError(503, 'LoginBusy', 'Login is busy; try again later'); }
+    this.sessions.revoke(cookie(req, 'bff_session'));
+    res.cookie('bff_session', session.token, { ...this.cookieOptions(), maxAge: 60 * 60 * 1000 });
+    return { customer, expiresAt: session.expiresAt };
+  }
+  // ponytail: in-memory, per-process; move to Redis/edge rate limiting when running more than one BFF instance.
+  private attempts = new Map<string, { count: number; resetAt: number }>();
+  private throttle(email: string) {
+    const now = Date.now(); const entry = this.attempts.get(email);
+    if (!entry || entry.resetAt <= now) { this.attempts.set(email, { count: 1, resetAt: now + 15 * 60 * 1000 }); return; }
+    if (++entry.count > 5) throw new CommerceError(429, 'TooManyAttempts', 'Too many sign-in attempts; try again in a few minutes');
+  }
+  private passwords() {
     const options = this.configured();
+    if (!options.passwords) throw new CommerceError(503, 'LoginNotConfigured', 'Email sign-in is not available');
+    return options.passwords;
+  }
+  async passwordLogin(req: Request, res: Response) {
+    const passwords = this.passwords();
+    if (!req.is('application/json')) throw new CommerceError(415, 'UnsupportedMediaType', 'Use application/json');
+    const input = z.strictObject({ email: z.email().max(254), password: z.string().min(1).max(128) }).safeParse(req.body);
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide email and password');
+    const email = input.data.email.toLowerCase();
+    this.throttle(email);
+    const result = await passwords.loginCustomer(email, input.data.password);
+    this.attempts.delete(email);
+    return this.startSession(req, res, result.customer);
+  }
+  async forgotPassword(req: Request) {
+    const options = this.configured(); const passwords = this.passwords();
+    if (!req.is('application/json')) throw new CommerceError(415, 'UnsupportedMediaType', 'Use application/json');
+    const input = z.strictObject({ email: z.email().max(254) }).safeParse(req.body);
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid email');
+    const email = input.data.email.toLowerCase();
+    this.throttle(`forgot:${email}`);
+    const token = await passwords.createPasswordToken(email);
+    // Not awaited and never surfaced: an SMTP failure or delay must not reveal whether the account exists.
+    if (token && options.sendResetLink) void options.sendResetLink(email, `${options.origin}/reset-password?token=${encodeURIComponent(token)}`).catch(error => console.error('Password reset email failed:', error instanceof Error ? error.message : 'unknown error'));
+    // Same answer whether or not the account exists.
+    return { message: 'If an account exists for that email, a reset link has been sent.' };
+  }
+  async resetPassword(req: Request) {
+    const passwords = this.passwords();
+    if (!req.is('application/json')) throw new CommerceError(415, 'UnsupportedMediaType', 'Use application/json');
+    const input = z.strictObject({ token: z.string().min(1).max(512), password: z.string().min(8).max(128) }).safeParse(req.body);
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide the reset token and a password of 8 to 128 characters');
+    await passwords.resetPassword(input.data.token, input.data.password);
+    return { message: 'Password updated. You can now sign in.' };
+  }
+  async register(req: Request, res: Response) {
+    const passwords = this.passwords();
+    if (!req.is('application/json')) throw new CommerceError(415, 'UnsupportedMediaType', 'Use application/json');
+    const input = registerInput.safeParse(req.body);
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid email and a password of 8 to 128 characters');
+    return this.startSession(req, res, (await passwords.registerCustomer(input.data)).customer);
+  }
+  async login(req: Request, res: Response) {
+    const options = this.google();
     if (!req.is('application/json')) throw new CommerceError(415, 'UnsupportedMediaType', 'Use application/json');
     const input = z.strictObject({ idToken: z.string().min(1).max(12000) }).safeParse(req.body);
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a Google ID token');
@@ -69,12 +143,7 @@ export class AuthService {
     if (!challenge) throw new CommerceError(401, 'InvalidLoginChallenge', 'Reload the login page to begin a new sign-in');
     const identity = await options.verifier.verify(input.data.idToken, challenge.id);
     const result = await options.customers.resolveGoogleCustomer(identity);
-    let session;
-    try { session = this.sessions.issue({ id: result.customer.id, email: result.customer.email }); }
-    catch { throw new CommerceError(503, 'LoginBusy', 'Login is busy; try again later'); }
-    this.sessions.revoke(cookie(req, 'bff_session'));
-    res.cookie('bff_session', session.token, { ...this.cookieOptions(), maxAge: 60 * 60 * 1000 });
-    return { customer: result.customer, expiresAt: session.expiresAt };
+    return this.startSession(req, res, result.customer);
   }
   customer(req: Request) {
     this.configured();
@@ -120,6 +189,29 @@ export class AuthController {
   @UseGuards(OriginGuard)
   login(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     return this.auth.login(req, res);
+  }
+
+  @Post('login')
+  @HttpCode(200)
+  @UseGuards(OriginGuard)
+  passwordLogin(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.auth.passwordLogin(req, res);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(200)
+  @UseGuards(OriginGuard)
+  forgotPassword(@Req() req: Request) { return this.auth.forgotPassword(req); }
+
+  @Post('reset-password')
+  @HttpCode(200)
+  @UseGuards(OriginGuard)
+  resetPassword(@Req() req: Request) { return this.auth.resetPassword(req); }
+
+  @Post('register')
+  @UseGuards(OriginGuard)
+  register(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.auth.register(req, res);
   }
 
   @Get('me')

@@ -27,7 +27,7 @@ test('Payment Only session requires address and shipping, then uses the prepared
   };
   let sessions = 0;
   const client = new CommercetoolsClient(config, async (url, init) => {
-    const path = String(url);
+    const path = String(url).split('?')[0]!; // ignore SDK expand query
     if (path.endsWith('/oauth/token')) return Response.json({ access_token: 'fake-token', expires_in: 3600 });
     if (path.endsWith('/sessions')) {
       sessions++;
@@ -65,7 +65,7 @@ test('Payment Only session requires address and shipping, then uses the prepared
   const methods = await client.listCheckoutShippingMethods(storeKey, cartId, customer);
   assert.equal(methods.shippingMethods[0]?.id, methodId);
   await client.setCheckoutShippingMethod(storeKey, cartId, methodId, customer);
-  assert.deepEqual(await client.createCheckoutSession(storeKey, cartId, customer), { sessionId: 'session-1' });
+  assert.deepEqual(await client.createCheckoutSession(storeKey, cartId, customer), { sessionId: 'session-1', projectKey: 'test-project', region: 'example.com' });
   assert.equal(sessions, 1);
   await assert.rejects(client.createCheckoutSession('sobeys-0520', cartId, customer), (error: unknown) => error instanceof CommerceError && error.code === 'CartNotFound');
 });

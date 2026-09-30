@@ -19,12 +19,15 @@
     "stores:import": "node --import tsx scripts/import-stores.ts"
   },
   "dependencies": {
+    "@commercetools/platform-sdk": "^9.5.0",
+    "@commercetools/sdk-client-v2": "^4.0.1",
     "@nestjs/common": "^12.0.3",
     "@nestjs/core": "^12.0.3",
     "@nestjs/platform-express": "^12.0.3",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
     "google-auth-library": "^11.0.2",
+    "nodemailer": "^10.0.12",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "^4.1.0"
@@ -33,6 +36,7 @@
     "@nestjs/cli": "^12.0.3",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
+    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
