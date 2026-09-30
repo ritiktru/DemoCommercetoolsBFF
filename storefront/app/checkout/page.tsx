@@ -1,16 +1,13 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, money } from '../api';
+import { api, money, type Money } from '../api';
 import LineItem from '../LineItem';
 import Loader from '../Loader';
 import { useStore } from '../StoreProvider';
 
 type Address = { firstName: string; lastName: string; streetName: string; city: string; state: string; postalCode: string; phone: string };
 type ShippingMethod = { id: string; name: string; isDefault?: boolean };
-declare global { interface Window { ctc?: (method: string, options: object) => void } }
-// Pinned, not @latest: this script runs on the page that takes payment.
-const CHECKOUT_SDK = 'https://unpkg.com/@commercetools/checkout-browser-sdk@1.7.4/browser/sdk.js';
 const blank: Address = { firstName: '', lastName: '', streetName: '', city: '', state: '', postalCode: '', phone: '' };
 
 function AddressFields({ value, onChange, prefix }: { value: Address; onChange: (next: Address) => void; prefix: string }) {
@@ -32,7 +29,7 @@ export default function Checkout() {
   const [sameBilling, setSameBilling] = useState(true);
   const [methods, setMethods] = useState<ShippingMethod[]>([]);
   const [methodId, setMethodId] = useState('');
-  const [paying, setPaying] = useState(false);
+  const [placed, setPlaced] = useState<{ orderNumber: string; total: Money }>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -41,7 +38,7 @@ export default function Checkout() {
 
   async function saveDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!cart) return;
-    setBusy(true); setMessage(''); setPaying(false);
+    setBusy(true); setMessage('');
     const clean = ({ phone, ...rest }: Address) => ({ ...rest, ...(phone.trim() && { phone: phone.trim() }) });
     try {
       const saved = await api(`${base}/checkout-address`, { method: 'POST', body: JSON.stringify({ cartId: cart.id, email, address: clean(shipping), ...(!sameBilling && { billingAddress: clean(billing) }) }) });
@@ -58,25 +55,24 @@ export default function Checkout() {
   // Selecting a method writes it to the cart so shipping and tax show in the summary before payment.
   async function chooseMethod(id: string, current: typeof cart = cart) {
     if (!current) return;
-    setMethodId(id); setPaying(false);
+    setMethodId(id);
     try { setCart((await api(`${base}/checkout-shipping`, { method: 'POST', body: JSON.stringify({ cartId: current.id, shippingMethodId: id }) })).cart); }
     catch (error) { setMessage((error as Error).message); }
   }
 
-  async function pay() {
+  async function placeOrder() {
     if (!cart || !methodId) return;
     setBusy(true); setMessage('');
     try {
-      const session = await api(`${base}/checkout-session`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
-      if (!window.ctc) await new Promise<void>((resolve, reject) => { const script = document.createElement('script'); script.src = CHECKOUT_SDK; script.onload = () => resolve(); script.onerror = () => reject(new Error('Payment SDK failed to load')); document.head.appendChild(script); });
-      if (!window.ctc) throw new Error('Payment SDK is unavailable');
-      window.ctc('paymentFlow', { projectKey: session.projectKey, region: session.region, sessionId: session.sessionId, locale: 'en-GB', logInfo: false, logWarn: true, logError: true });
-      setPaying(true);
+      const { order } = await api(`${base}/orders`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
+      localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
+      setPlaced({ orderNumber: order.orderNumber ?? order.id, total: order.totalPrice });
     } catch (error) { setMessage((error as Error).message); }
     finally { setBusy(false); }
   }
 
   if (!ready) return <Loader label="Loading…" />;
+  if (placed) return <main><section className="checkoutPanel"><h1>Thank you, your order is placed</h1><p>Order number <strong>{placed.orderNumber}</strong> · {money(placed.total)}</p><p>No payment was taken. We will confirm your order shortly.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
   if (!cart?.lineItems.length) return <main><section className="checkoutPanel"><h1>Checkout</h1><p>Your cart is empty.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
 
   const readyToPay = !!cart.shippingInfo && methods.length > 0;
@@ -95,9 +91,9 @@ export default function Checkout() {
         </form>
         {methods.length > 0 && <section className="checkoutPanel"><h2>4. Delivery method</h2>
           {methods.map(method => <label className="check" key={method.id}><input type="radio" name="delivery" checked={method.id === methodId} onChange={() => chooseMethod(method.id)} /> {method.name}</label>)}</section>}
-        {readyToPay && <section className="checkoutPanel"><h2>5. Payment</h2>
-          <p>{paying ? 'Complete your payment in the secure payment window.' : `You will pay ${money(cart.taxedPrice?.totalGross ?? cart.totalPrice)} with the payment methods enabled in commercetools Checkout.`}</p>
-          <button className="checkoutButton" disabled={busy} onClick={pay}>{paying ? 'Reopen payment' : 'Pay now'}</button></section>}
+        {readyToPay && <section className="checkoutPanel"><h2>5. Place order</h2>
+          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}. No payment is taken now; the order is saved in commercetools.</p>
+          <button className="checkoutButton" disabled={busy} onClick={placeOrder}>Place order</button></section>}
         {message && <p className="error" role="alert">{message}</p>}
       </div>
       <aside>
