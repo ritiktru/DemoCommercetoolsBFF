@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, money, type Money } from '../api';
 import LineItem from '../LineItem';
 import Loader from '../Loader';
@@ -9,6 +9,20 @@ import { useStore } from '../StoreProvider';
 type Address = { firstName: string; lastName: string; streetName: string; city: string; state: string; postalCode: string; phone: string };
 type ShippingMethod = { id: string; name: string; isDefault?: boolean };
 const blank: Address = { firstName: '', lastName: '', streetName: '', city: '', state: '', postalCode: '', phone: '' };
+
+// Global Payments hosted fields: card data is typed into GP iframes and only a single-use token reaches our BFF.
+type CardForm = { on(event: string, handler: (response: { paymentReference?: string; reasons?: Array<{ message?: string }> }) => void): void; dispose?(): void };
+type GlobalPaymentsJs = { configure(options: object): void; creditCard: { form(target: string, options: object): CardForm } };
+declare global { interface Window { GlobalPayments?: GlobalPaymentsJs } }
+function loadGlobalPayments(): Promise<GlobalPaymentsJs> {
+  if (window.GlobalPayments) return Promise.resolve(window.GlobalPayments);
+  return new Promise((resolve, reject) => {
+    const script = Object.assign(document.createElement('script'), { src: 'https://js.globalpay.com/4.1.11/globalpayments.js', async: true });
+    script.onload = () => window.GlobalPayments ? resolve(window.GlobalPayments) : reject(new Error('Payment form failed to load'));
+    script.onerror = () => reject(new Error('Payment form failed to load'));
+    document.head.append(script);
+  });
+}
 
 function AddressFields({ value, onChange, prefix }: { value: Address; onChange: (next: Address) => void; prefix: string }) {
   const field = (name: keyof Address, label: string, autoComplete: string, required = true) =>
@@ -60,19 +74,41 @@ export default function Checkout() {
     catch (error) { setMessage((error as Error).message); }
   }
 
-  async function placeOrder() {
+  const cardForm = useRef<CardForm>(undefined);
+  const [paying, setPaying] = useState(false);
+  const closeCardForm = () => {
+    cardForm.current?.dispose?.(); cardForm.current = undefined;
+    document.getElementById('card-form')?.replaceChildren();
+    setPaying(false);
+  };
+  useEffect(() => closeCardForm, []);
+
+  // The BFF fixes the amount from the cart and returns a tokenize-only access token; the card form then yields a
+  // single-use token that the BFF charges server-to-server before creating the order.
+  async function startPayment() {
     if (!cart || !methodId) return;
-    setBusy(true); setMessage('');
+    setBusy(true); setMessage(''); closeCardForm();
     try {
-      const { order } = await api(`${base}/orders`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
-      localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
-      setPlaced({ orderNumber: order.orderNumber ?? order.id, total: order.totalPrice });
+      const [gp, started] = await Promise.all([loadGlobalPayments(), api(`${base}/payments`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) })]);
+      gp.configure({ accessToken: started.accessToken, apiVersion: '2021-03-22', env: started.env });
+      const form = gp.creditCard.form('#card-form', { style: 'gp-default', enableSavedPaymentMethods: false });
+      cardForm.current = form; setPaying(true);
+      form.on('token-error', response => setMessage(response.reasons?.[0]?.message ?? 'Check your card details'));
+      form.on('token-success', async ({ paymentReference }) => {
+        setBusy(true); setMessage('');
+        try {
+          const { order } = await api(`${base}/payments/charge`, { method: 'POST', body: JSON.stringify({ cartId: cart.id, paymentId: started.paymentId, cardToken: paymentReference }) });
+          closeCardForm(); localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
+          setPlaced({ orderNumber: order.orderNumber ?? order.id, total: order.totalPrice });
+        } catch (error) { closeCardForm(); setMessage((error as Error).message); }
+        finally { setBusy(false); }
+      });
     } catch (error) { setMessage((error as Error).message); }
     finally { setBusy(false); }
   }
 
   if (!ready) return <Loader label="Loading…" />;
-  if (placed) return <main><section className="checkoutPanel"><h1>Thank you, your order is placed</h1><p>Order number <strong>{placed.orderNumber}</strong> · {money(placed.total)}</p><p>No payment was taken. We will confirm your order shortly.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
+  if (placed) return <main><section className="checkoutPanel"><h1>Thank you, your order is placed</h1><p>Order number <strong>{placed.orderNumber}</strong> · {money(placed.total)}</p><p>Your payment was received. We will confirm your order shortly.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
   if (!cart?.lineItems.length) return <main><section className="checkoutPanel"><h1>Checkout</h1><p>Your cart is empty.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
 
   const readyToPay = !!cart.shippingInfo && methods.length > 0;
@@ -91,9 +127,10 @@ export default function Checkout() {
         </form>
         {methods.length > 0 && <section className="checkoutPanel"><h2>4. Delivery method</h2>
           {methods.map(method => <label className="check" key={method.id}><input type="radio" name="delivery" checked={method.id === methodId} onChange={() => chooseMethod(method.id)} /> {method.name}</label>)}</section>}
-        {readyToPay && <section className="checkoutPanel"><h2>5. Place order</h2>
-          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}. No payment is taken now; the order is saved in commercetools.</p>
-          <button className="checkoutButton" disabled={busy} onClick={placeOrder}>Place order</button></section>}
+        {readyToPay && <section className="checkoutPanel"><h2>5. Payment</h2>
+          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}.</p>
+          <div id="card-form" />
+          {!paying && <button className="checkoutButton" disabled={busy} onClick={startPayment}>{message ? 'Try payment again' : 'Pay by card'}</button>}</section>}
         {message && <p className="error" role="alert">{message}</p>}
       </div>
       <aside>

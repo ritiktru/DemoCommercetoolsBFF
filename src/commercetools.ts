@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import { ClientBuilder, type TokenStore } from '@commercetools/sdk-client-v2';
-import { createApiBuilderFromCtpClient, type CartUpdateAction, type ClientResponse, type CustomerDraft } from '@commercetools/platform-sdk';
+import { createApiBuilderFromCtpClient, type Cart, type CartUpdateAction, type ClientResponse, type CustomerDraft, type Order, type Payment } from '@commercetools/platform-sdk';
 import type { Config } from './config.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
-import type { AddItemInput, CheckoutAddressInput, DiscountCodeInput, StorefrontService, UpdateItemInput } from './storefront/storefront.js';
+import type { AddItemInput, ChargePaymentInput, CheckoutAddressInput, DiscountCodeInput, StorefrontService, UpdateItemInput } from './storefront/storefront.js';
+import { GlobalPaymentsClient, type GpTransaction } from './payments/globalpayments.js';
 
 export const customerInput = z.strictObject({
   email: z.email().max(254),
@@ -53,11 +54,21 @@ const cartArgs = { expand: ['discountCodes[*].discountCode'] };
 type StoreContext = { country: string; currency: string; channel?: { id: string; key: string } };
 const CURRENCY_BY_COUNTRY: Record<string, string> = { CA: 'CAD', US: 'USD', GB: 'GBP', DE: 'EUR', FR: 'EUR', NL: 'EUR', AU: 'AUD' };
 const origin = (url: string) => url.replace(/\/$/, '');
+const cartTotal = (cart: Cart) => cart.taxedPrice?.totalGross ?? cart.totalPrice;
+// One order per cart: commercetools rejects a duplicate orderNumber, which makes order creation idempotent.
+const orderNumberFor = (cartId: string) => `SO-${createHash('sha256').update(cartId).digest('hex').slice(0, 10).toUpperCase()}`;
+const chargedOf = (payment: Payment) => payment.transactions.filter(t => t.type === 'Charge' && t.state === 'Success').reduce((sum, t) => sum + t.amount.centAmount, 0);
+const gpFail = () => new CommerceError(502, 'PaymentGatewayFailed', 'Payment service is unavailable; try again');
+// Custom Type created in Merchant Center (resourceTypeIds: order); links the order to the payment ref issued at initiation.
+const PAYMENT_REF_TYPE_KEY = 'internal-payment-reference-type';
+const orderView = (order: Order) => ({ order: { id: order.id, orderNumber: order.orderNumber, totalPrice: order.taxedPrice?.totalGross ?? order.totalPrice } });
 
 export class CommercetoolsClient implements CustomerService, CartService, StorefrontService {
   private tokenStore: TokenStore = { token: '', expirationTime: -1 };
   private readonly api;
+  private readonly gp?: GlobalPaymentsClient;
   constructor(private readonly config: Config, private readonly fetcher: typeof fetch = fetch) {
+    if (config.GP_APP_ID && config.GP_APP_KEY) this.gp = new GlobalPaymentsClient(config.GP_APP_ID, config.GP_APP_KEY, config.GP_ENV, fetcher);
     const client = new ClientBuilder()
       .withClientCredentialsFlow({
         host: origin(config.CT_AUTH_URL), projectKey: config.CT_PROJECT_KEY,
@@ -277,16 +288,113 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { cart: cartSchema.parse(await this.postCart(cartId, cart.version, [{ action: 'setShippingMethod', shippingMethod: { typeId: 'shipping-method', id: shippingMethodId } }])) };
   }
 
-  // Saves the cart as a commercetools Order with no payment taken; the order is then managed in commercetools.
-  async placeOrder(storeKey: string, cartId: string, customer?: SessionCustomer) {
+  private payments() {
+    if (!this.gp) throw new CommerceError(503, 'PaymentsNotConfigured', 'Set GP_APP_ID and GP_APP_KEY');
+    return this.gp;
+  }
+  private getPayment(id: string) {
+    return this.ct(this.api.payments().withId({ ID: id }).get(), status => status === 404 ? new CommerceError(404, 'PaymentNotFound', 'Payment not found') : failWith('Unable to load payment')());
+  }
+  private findOrder(orderNumber: string) {
+    return this.ct(this.api.orders().withOrderNumber({ orderNumber }).get(), () => new CommerceError(404, 'OrderNotFound', 'Order not found')).catch(() => undefined);
+  }
+
+  // Step 1: the amount is fixed here from the commercetools cart; the browser only receives a tokenize-only access token.
+  async startPayment(storeKey: string, cartId: string, customer?: SessionCustomer) {
+    const gp = this.payments();
     const { cart, raw } = await this.getCheckoutCart(storeKey, cartId, customer);
     if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add at least one product before checkout');
-    if (!raw.shippingAddress || !raw.shippingInfo) throw new CommerceError(400, 'CheckoutNotReady', 'Enter an address and select a delivery method before placing the order');
-    const order = await this.ct(this.api.orders().post({ body: { id: cartId, version: cart.version, orderNumber: `SO-${randomBytes(5).toString('hex').toUpperCase()}` } }), (status, error) =>
-      status === 409 ? new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again')
-        : status === 429 ? new CommerceError(503, 'CommerceBusy', 'Commerce service is busy; try again later')
-        : new CommerceError(502, 'OrderFailed', `Unable to place order${codesOf(error).length ? `: ${codesOf(error).join(', ')}` : ''}`));
-    return { order: { id: order.id, orderNumber: order.orderNumber, totalPrice: order.taxedPrice?.totalGross ?? order.totalPrice } };
+    if (!raw.shippingAddress || !raw.shippingInfo) throw new CommerceError(400, 'CheckoutNotReady', 'Enter an address and select a delivery method before payment');
+    const { currencyCode, centAmount } = cartTotal(raw);
+    const payment = await this.ct(this.api.payments().post({ body: {
+      amountPlanned: { currencyCode, centAmount },
+      paymentMethodInfo: { paymentInterface: 'GlobalPayments', method: 'CreditCard' },
+    } }), failWith('Unable to start payment'));
+    await this.postCart(cartId, cart.version, [{ action: 'addPayment', payment: { typeId: 'payment', id: payment.id } }]);
+    const accessToken = await gp.tokenizationToken().catch(() => { throw gpFail(); });
+    return { paymentId: payment.id, accessToken, env: this.config.GP_ENV, amount: { currencyCode, centAmount } };
+  }
+
+  // Step 2: charge the single-use card token server-to-server, then turn the cart into a paid order.
+  async chargePayment(storeKey: string, input: ChargePaymentInput, customer?: SessionCustomer) {
+    const gp = this.payments();
+    const { raw } = await this.getCheckoutCart(storeKey, input.cartId, customer);
+    if (!raw.paymentInfo?.payments.some(p => p.id === input.paymentId)) throw new CommerceError(404, 'PaymentNotFound', 'Payment not found');
+    const payment = await this.getPayment(input.paymentId);
+    if (!chargedOf(payment)) {
+      const total = cartTotal(raw);
+      if (total.centAmount !== payment.amountPlanned.centAmount || total.currencyCode !== payment.amountPlanned.currencyCode) {
+        throw new CommerceError(409, 'CartChanged', 'Your cart changed after payment started; start payment again');
+      }
+      const transaction = await gp.charge({
+        centAmount: total.centAmount, currency: total.currencyCode, country: raw.country ?? 'CA',
+        reference: payment.id, cardToken: input.cardToken,
+      }).catch(() => { throw gpFail(); });
+      await this.recordTransaction(payment, transaction);
+      if (transaction.status !== 'CAPTURED') throw new CommerceError(402, 'PaymentDeclined', 'Your card was declined; try another card');
+    }
+    return this.settle(input.cartId, payment.id);
+  }
+
+  // Step 3 (server to server): Global Payments notifies us; only the transaction ID is taken from the body,
+  // everything else is read back from Global Payments so a forged or replayed body cannot create an order.
+  async handlePaymentWebhook(rawBody: Buffer | undefined, signature: string | undefined, body: unknown) {
+    const gp = this.payments();
+    if (!rawBody || !gp.verifySignature(rawBody, signature)) throw new CommerceError(401, 'InvalidSignature', 'Invalid webhook signature');
+    const notice = z.object({ id: z.string().regex(/^TRN_[A-Za-z0-9_-]+$/) }).safeParse(body);
+    if (!notice.success) return { received: true };
+    const transaction = await gp.getTransaction(notice.data.id).catch(() => { throw gpFail(); });
+    if (!z.uuid().safeParse(transaction.reference).success) return { received: true };
+    const payment = await this.getPayment(transaction.reference!).catch(error => { if (error instanceof CommerceError && error.status === 404) return undefined; throw error; });
+    if (payment?.paymentMethodInfo.paymentInterface !== 'GlobalPayments') return { received: true };
+    await this.recordTransaction(payment, transaction);
+    if (transaction.status !== 'CAPTURED') return { received: true };
+    const carts = await this.ct(this.api.carts().get({ queryArgs: { where: `paymentInfo(payments(id="${payment.id}"))`, limit: 1 } }), failWith('Unable to load cart for payment'));
+    if (carts.results[0]) await this.settle(carts.results[0].id, payment.id);
+    return { received: true };
+  }
+
+  private async recordTransaction(payment: Payment, transaction: GpTransaction): Promise<void> {
+    if (payment.transactions.some(t => t.interactionId === transaction.id)) return;
+    try {
+      await this.ct(this.api.payments().withId({ ID: payment.id }).post({ body: { version: payment.version, actions: [{ action: 'addTransaction', transaction: {
+        type: 'Charge', interactionId: transaction.id, state: transaction.status === 'CAPTURED' ? 'Success' : 'Failure',
+        amount: { currencyCode: transaction.currency, centAmount: transaction.amount },
+      } }] } }), status => status === 409 ? new CommerceError(409, 'ConcurrentModification', '') : failWith('Unable to record payment')());
+    } catch (error) {
+      // The charge response and the webhook can race on the same Payment; re-read and try again.
+      if (error instanceof CommerceError && error.status === 409) return this.recordTransaction(await this.getPayment(payment.id), transaction);
+      throw error;
+    }
+  }
+
+  // Idempotent: the charge response and the webhook both call this; the deterministic orderNumber lets only one order exist.
+  private async settle(cartId: string, paymentId: string) {
+    const orderNumber = orderNumberFor(cartId);
+    const existing = await this.findOrder(orderNumber);
+    if (existing) return orderView(existing);
+    const [cart, payment] = await Promise.all([
+      this.ct(this.api.carts().withId({ ID: cartId }).get(), () => new CommerceError(404, 'CartNotFound', 'Cart not found')),
+      this.getPayment(paymentId),
+    ]);
+    const total = cartTotal(cart);
+    if (!cart.paymentInfo?.payments.some(p => p.id === paymentId) || chargedOf(payment) !== total.centAmount || payment.amountPlanned.currencyCode !== total.currencyCode) {
+      // ponytail: money is captured but does not match the cart; needs a refund or manual review, not automated yet.
+      throw new CommerceError(409, 'PaymentMismatch', 'Payment does not match the cart total; contact support');
+    }
+    try {
+      return orderView(await this.ct(this.api.orders().post({ body: {
+        id: cartId, version: cart.version, orderNumber, paymentState: 'Paid',
+        custom: { type: { typeId: 'type', key: PAYMENT_REF_TYPE_KEY }, fields: { internal_payment_ref_id: paymentId } },
+      } }), (status, error) =>
+        status === 409 ? new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again')
+          : status === 429 ? new CommerceError(503, 'CommerceBusy', 'Commerce service is busy; try again later')
+          : new CommerceError(502, 'OrderFailed', `Unable to place order${codesOf(error).length ? `: ${codesOf(error).join(', ')}` : ''}`)));
+    } catch (error) {
+      const raced = await this.findOrder(orderNumber);
+      if (raced) return orderView(raced);
+      throw error;
+    }
   }
 
   async createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer) {

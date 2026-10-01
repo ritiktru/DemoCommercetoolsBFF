@@ -1,9 +1,9 @@
-import { Body, Controller, Get, Patch, Inject, Module, Param, Post, Req, UseGuards, type DynamicModule } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Patch, Inject, Module, Param, Post, Req, UseGuards, type DynamicModule } from '@nestjs/common';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { AuthService, OriginGuard } from '../auth.js';
 import { CommerceError } from '../commercetools.js';
-import { productKeySchema, addItemInput, checkoutAddressInput, discountCodeInput, removeDiscountInput, updateItemInput, storeKeySchema, type StorefrontService } from './storefront.js';
+import { productKeySchema, addItemInput, chargePaymentInput, checkoutAddressInput, discountCodeInput, removeDiscountInput, updateItemInput, storeKeySchema, type StorefrontService } from './storefront.js';
 const SERVICE = Symbol('STOREFRONT_SERVICE');
 
 @Controller('api/storefront')
@@ -67,12 +67,19 @@ export class StorefrontController {
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
     return this.storefront.createCheckoutSession(key.data, input.data.cartId, this.optionalCustomer(req));
   }
-  @Post('stores/:storeKey/orders') @UseGuards(OriginGuard)
-  placeOrder(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+  @Post('stores/:storeKey/payments') @UseGuards(OriginGuard)
+  startPayment(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw); const input = z.strictObject({ cartId: z.uuid() }).safeParse(body);
     if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
-    return this.storefront.placeOrder(key.data, input.data.cartId, this.optionalCustomer(req));
+    return this.storefront.startPayment(key.data, input.data.cartId, this.optionalCustomer(req));
+  }
+  @Post('stores/:storeKey/payments/charge') @UseGuards(OriginGuard) @HttpCode(200)
+  chargePayment(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const input = chargePaymentInput.safeParse(body);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide cartId, paymentId, and cardToken');
+    return this.storefront.chargePayment(key.data, input.data, this.optionalCustomer(req));
   }
   @Post('stores/:storeKey/checkout-address') @UseGuards(OriginGuard)
   checkoutAddress(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
@@ -98,9 +105,18 @@ export class StorefrontController {
   }
   private optionalCustomer(req: Request) { try { return this.auth.customer(req); } catch (error) { if (error instanceof CommerceError && error.status === 401) return undefined; throw error; } }
 }
+// Called by Global Payments, not the browser: no session or Origin check; the X-GP-Signature over the raw body is the auth.
+@Controller('api/payments/globalpayments')
+export class PaymentWebhookController {
+  constructor(@Inject(SERVICE) private readonly storefront: StorefrontService) {}
+  @Post('webhook') @HttpCode(200)
+  webhook(@Body() body: unknown, @Req() req: Request & { rawBody?: Buffer }) {
+    return this.storefront.handlePaymentWebhook(req.rawBody, req.get('x-gp-signature'), body);
+  }
+}
 @Module({})
 export class StorefrontModule {
   static register(service: StorefrontService, auth: DynamicModule): DynamicModule {
-    return { module: StorefrontModule, imports: [auth], controllers: [StorefrontController], providers: [{ provide: SERVICE, useValue: service }] };
+    return { module: StorefrontModule, imports: [auth], controllers: [StorefrontController, PaymentWebhookController], providers: [{ provide: SERVICE, useValue: service }] };
   }
 }

@@ -19,6 +19,7 @@ export async function createApp(customers: CustomerService, auth?: AuthOptions, 
     res.setHeader('Cache-Control', 'no-store');
     next();
   });
-  app.use(express.json({ limit: '16kb' }));
+  // Keep the exact request bytes: the Global Payments webhook signature is computed over them, not over re-serialized JSON.
+  app.use(express.json({ limit: '16kb', verify: (req, _res, buf) => { (req as express.Request & { rawBody?: Buffer }).rawBody = buf; } }));
   return app;
 }

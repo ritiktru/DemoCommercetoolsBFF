@@ -23,6 +23,9 @@ const addressInput = z.strictObject({
 // billingAddress defaults to the shipping address.
 export const checkoutAddressInput = z.strictObject({ cartId: z.uuid(), email: z.email().max(254), address: addressInput, billingAddress: addressInput.optional() });
 export type CheckoutAddressInput = z.infer<typeof checkoutAddressInput>;
+// cardToken is the single-use payment reference from Global Payments hosted fields; card data never reaches the BFF.
+export const chargePaymentInput = z.strictObject({ cartId: z.uuid(), paymentId: z.uuid(), cardToken: z.string().regex(/^PMT_[A-Za-z0-9_-]{1,100}$/) });
+export type ChargePaymentInput = z.infer<typeof chargePaymentInput>;
 export interface StorefrontService {
   listStores(): Promise<unknown>;
   getPromotion(): Promise<unknown>;
@@ -37,6 +40,8 @@ export interface StorefrontService {
   setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer): Promise<unknown>;
   listCheckoutShippingMethods(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
   setCheckoutShippingMethod(storeKey: string, cartId: string, shippingMethodId: string, customer?: SessionCustomer): Promise<unknown>;
-  placeOrder(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
+  startPayment(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
+  chargePayment(storeKey: string, input: ChargePaymentInput, customer?: SessionCustomer): Promise<unknown>;
+  handlePaymentWebhook(rawBody: Buffer | undefined, signature: string | undefined, body: unknown): Promise<unknown>;
   createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
 }

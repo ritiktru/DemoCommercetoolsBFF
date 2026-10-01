@@ -25,6 +25,10 @@ const schema = z.object({
   SMTP_USER: z.preprocess(blank, z.string().optional()),
   SMTP_PASS: z.preprocess(blank, z.string().optional()),
   MAIL_FROM: z.preprocess(blank, z.string().trim().min(3).optional()),
+  // Global Payments GP API app credentials (developer portal > Apps). Without them card payment returns 503.
+  GP_APP_ID: z.preprocess(blank, z.string().trim().min(1).optional()),
+  GP_APP_KEY: z.preprocess(blank, z.string().min(1).optional()),
+  GP_ENV: z.preprocess(blank, z.enum(['sandbox', 'production']).default('sandbox')),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 });
 export type Config = z.infer<typeof schema>;
@@ -49,5 +53,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const { SMTP_HOST, MAIL_FROM, SMTP_USER, SMTP_PASS } = result.data;
   if (SMTP_HOST && !MAIL_FROM) throw new Error('MAIL_FROM is required when SMTP_HOST is set');
   if (Boolean(SMTP_USER) !== Boolean(SMTP_PASS)) throw new Error('Set both SMTP_USER and SMTP_PASS, or neither');
+  if (Boolean(result.data.GP_APP_ID) !== Boolean(result.data.GP_APP_KEY)) throw new Error('Set both GP_APP_ID and GP_APP_KEY, or neither');
   return result.data;
 }
