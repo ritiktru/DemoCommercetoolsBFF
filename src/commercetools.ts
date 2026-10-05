@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { ClientBuilder, type TokenStore } from '@commercetools/sdk-client-v2';
 import { createApiBuilderFromCtpClient, type CartUpdateAction, type ClientResponse, type CustomerDraft } from '@commercetools/platform-sdk';
 import type { Config } from './config.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { TransactionStore, validAdyenHmac, type AdyenNotificationItem, type Transaction } from './payments.js';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
@@ -53,10 +54,14 @@ const cartArgs = { expand: ['discountCodes[*].discountCode'] };
 type StoreContext = { country: string; currency: string; channel?: { id: string; key: string } };
 const CURRENCY_BY_COUNTRY: Record<string, string> = { CA: 'CAD', US: 'USD', GB: 'GBP', DE: 'EUR', FR: 'EUR', NL: 'EUR', AU: 'AUD' };
 const origin = (url: string) => url.replace(/\/$/, '');
+const ADYEN_CHECKOUT_URL = 'https://checkout-test.adyen.com/v71';
+const ORDER_PAYMENT_TYPE_KEY = 'internal-payment-reference-type';
 
 export class CommercetoolsClient implements CustomerService, CartService, StorefrontService {
   private tokenStore: TokenStore = { token: '', expirationTime: -1 };
   private readonly api;
+  private readonly transactions: TransactionStore;
+  private readonly ordering = new Map<string, Promise<NonNullable<Transaction['order']>>>();
   constructor(private readonly config: Config, private readonly fetcher: typeof fetch = fetch) {
     const client = new ClientBuilder()
       .withClientCredentialsFlow({
@@ -67,6 +72,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       })
       .withHttpMiddleware({ host: origin(config.CT_API_URL), fetch: fetcher, timeout: 15000, getAbortController: () => new AbortController(), enableRetry: false })
       .build();
+    this.transactions = new TransactionStore(config.PAYMENT_STORE_PATH);
     this.api = createApiBuilderFromCtpClient(client).withProjectKey({ projectKey: config.CT_PROJECT_KEY });
   }
 
@@ -277,16 +283,95 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { cart: cartSchema.parse(await this.postCart(cartId, cart.version, [{ action: 'setShippingMethod', shippingMethod: { typeId: 'shipping-method', id: shippingMethodId } }])) };
   }
 
-  // Saves the cart as a commercetools Order with no payment taken; the order is then managed in commercetools.
-  async placeOrder(storeKey: string, cartId: string, customer?: SessionCustomer) {
+  // Step 1-3: validate the cart, open an Adyen Hosted Checkout session and remember cartId -> payment_ref_id -> session.
+  async initiateCheckout(storeKey: string, cartId: string, customer?: SessionCustomer) {
+    const { ADYEN_API_KEY, ADYEN_MERCHANT_ACCOUNT, APP_ORIGIN } = this.config;
+    if (!ADYEN_API_KEY || !ADYEN_MERCHANT_ACCOUNT || !APP_ORIGIN) throw new CommerceError(503, 'PaymentNotConfigured', 'Set ADYEN_API_KEY, ADYEN_MERCHANT_ACCOUNT and APP_ORIGIN');
     const { cart, raw } = await this.getCheckoutCart(storeKey, cartId, customer);
     if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add at least one product before checkout');
-    if (!raw.shippingAddress || !raw.shippingInfo) throw new CommerceError(400, 'CheckoutNotReady', 'Enter an address and select a delivery method before placing the order');
-    const order = await this.ct(this.api.orders().post({ body: { id: cartId, version: cart.version, orderNumber: `SO-${randomBytes(5).toString('hex').toUpperCase()}` } }), (status, error) =>
+    if (!raw.shippingAddress || !raw.shippingInfo) throw new CommerceError(400, 'CheckoutNotReady', 'Enter an address and select a delivery method before payment');
+    const total = cart.taxedPrice?.totalGross ?? cart.totalPrice;
+    const paymentRefId = `PAY-${randomUUID()}`;
+    const response = await this.fetcher(`${ADYEN_CHECKOUT_URL}/sessions`, {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
+      headers: { 'X-API-Key': ADYEN_API_KEY, 'Content-Type': 'application/json', 'Idempotency-Key': paymentRefId },
+      body: JSON.stringify({
+        mode: 'hosted', merchantAccount: ADYEN_MERCHANT_ACCOUNT, reference: paymentRefId,
+        // Adyen minor units match commercetools centAmount for 2-decimal currencies (CAD, USD, EUR, GBP).
+        amount: { value: total.centAmount, currency: total.currencyCode },
+        countryCode: cart.country, shopperEmail: raw.customerEmail ?? raw.shippingAddress.email,
+        returnUrl: `${APP_ORIGIN}/checkout?paymentRef=${paymentRefId}`,
+      }),
+    }).catch((error: Error) => { console.error('[adyen] /sessions network error:', error.message, error.cause ?? ''); return undefined; });
+    // Adyen errors are JSON ({ status, errorCode, message, errorType, pspReference }); anything else (e.g. a proxy page) is logged raw.
+    if (response && !response.ok) {
+      const text = await response.text().catch(() => '');
+      let body: unknown = text.slice(0, 1000);
+      try { body = JSON.parse(text); } catch { /* not JSON */ }
+      console.error(`[adyen] /sessions HTTP ${response.status} pspReference=${response.headers.get('pspreference') ?? 'none'}`, body);
+      throw new CommerceError(502, `[adyen] /sessions HTTP ${response.status} pspReference=${response.headers.get('pspreference') ?? 'none'}`, JSON.stringify(body))
+    }
+    if (!response?.ok) throw new CommerceError(502, 'PaymentSessionFailed', 'Unable to start payment with Adyen');
+    const session = z.object({ id: z.string().min(1), url: z.url() }).parse(await response.json());
+    this.transactions.save({ cartId, payment_ref_id: paymentRefId, transaction_token: session.id, storeKey, amount: { currencyCode: total.currencyCode, centAmount: total.centAmount }, status: 'pending' });
+    return { paymentRefId, sessionId: session.id, url: session.url };
+  }
+
+  // Step 5: the storefront polls this; once payment is confirmed the Order is created exactly once.
+  async paymentStatus(storeKey: string, paymentRefId: string, customer?: SessionCustomer) {
+    const txn = this.transactions.find(paymentRefId);
+    if (!txn || txn.storeKey !== storeKey) throw new CommerceError(404, 'PaymentNotFound', 'Payment not found');
+    if (txn.order) return { status: 'paid', order: txn.order };
+    if (txn.status === 'pending') {
+      // ponytail: simulated webhook — any return from the hosted page counts as paid after the delay, even a cancel. Real fix: GET /sessions/{id}?sessionResult= or the HMAC webhook.
+      txn.firstPolledAt ??= Date.now();
+      if (Date.now() - txn.firstPolledAt < this.config.PAYMENT_SIMULATED_DELAY_MS) { this.transactions.save(txn); return { status: 'pending' }; }
+      txn.status = 'paid'; this.transactions.save(txn);
+    }
+    // Concurrent polls share one order creation so the cart is never ordered twice.
+    let pending = this.ordering.get(paymentRefId);
+    if (!pending) {
+      pending = this.createPaidOrder(txn, customer).finally(() => this.ordering.delete(paymentRefId));
+      this.ordering.set(paymentRefId, pending);
+    }
+    return { status: 'paid', order: await pending };
+  }
+
+  private async createPaidOrder(txn: Transaction, customer?: SessionCustomer) {
+    const { cart } = await this.getCheckoutCart(txn.storeKey, txn.cartId, customer);
+    const total = cart.taxedPrice?.totalGross ?? cart.totalPrice;
+    if (total.centAmount !== txn.amount.centAmount || total.currencyCode !== txn.amount.currencyCode) {
+      throw new CommerceError(409, 'CartChangedAfterPayment', 'The cart total changed after payment started; contact support');
+    }
+    const order = await this.ct(this.api.orders().post({ body: {
+      id: txn.cartId, version: cart.version, orderNumber: `SO-${randomBytes(5).toString('hex').toUpperCase()}`, paymentState: 'Paid',
+      custom: { type: { typeId: 'type', key: ORDER_PAYMENT_TYPE_KEY }, fields: { internal_payment_ref_id: txn.payment_ref_id } },
+    } }), (status, error) =>
       status === 409 ? new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again')
         : status === 429 ? new CommerceError(503, 'CommerceBusy', 'Commerce service is busy; try again later')
         : new CommerceError(502, 'OrderFailed', `Unable to place order${codesOf(error).length ? `: ${codesOf(error).join(', ')}` : ''}`));
-    return { order: { id: order.id, orderNumber: order.orderNumber, totalPrice: order.taxedPrice?.totalGross ?? order.totalPrice } };
+    txn.order = { id: order.id, orderNumber: order.orderNumber, totalPrice: order.taxedPrice?.totalGross ?? order.totalPrice };
+    this.transactions.save(txn);
+    return txn.order;
+  }
+
+  // Step 4: Adyen AUTHORISATION webhook. Not reachable on localhost; the simulated path in paymentStatus covers the POC.
+  handlePaymentWebhook(body: unknown) {
+    if (!this.config.ADYEN_HMAC_KEY) throw new CommerceError(503, 'WebhookNotConfigured', 'Set ADYEN_HMAC_KEY');
+    const items = (body as { notificationItems?: Array<{ NotificationRequestItem?: AdyenNotificationItem }> })?.notificationItems?.map(i => i.NotificationRequestItem);
+    if (!items?.length || items.some(item => !item?.amount || !validAdyenHmac(item, this.config.ADYEN_HMAC_KEY!))) {
+      throw new CommerceError(401, 'InvalidSignature', 'Invalid webhook signature');
+    }
+    for (const item of items as AdyenNotificationItem[]) {
+      const txn = this.transactions.find(item.merchantReference);
+      if (!txn) continue;
+      // Every verified event is recorded; only a successful AUTHORISATION for the exact amount marks it paid.
+      const authorised = item.eventCode === 'AUTHORISATION' && item.success === 'true' &&
+        item.amount.value === txn.amount.centAmount && item.amount.currency === txn.amount.currencyCode;
+      this.transactions.save({ ...txn, eventCode: item.eventCode, payment_method: item.paymentMethod ?? txn.payment_method,
+        ...(authorised && { status: 'paid' as const, pspReference: item.pspReference }) });
+    }
+    return '[accepted]';
   }
 
   async createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer) {

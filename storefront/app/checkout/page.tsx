@@ -32,6 +32,7 @@ export default function Checkout() {
   const [placed, setPlaced] = useState<{ orderNumber: string; total: Money }>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [verifying, setVerifying] = useState(false);
 
   const base = `/api/storefront/stores/${storeKey}`;
   useEffect(() => { if (customer) setEmail(customer.email); }, [customer]);
@@ -60,19 +61,43 @@ export default function Checkout() {
     catch (error) { setMessage((error as Error).message); }
   }
 
-  async function placeOrder() {
+  // Adyen Hosted Checkout: the BFF opens a session and we leave for Adyen's page; Adyen returns to /checkout?paymentRef=…
+  async function pay() {
     if (!cart || !methodId) return;
     setBusy(true); setMessage('');
     try {
-      const { order } = await api(`${base}/orders`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
-      localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
-      setPlaced({ orderNumber: order.orderNumber ?? order.id, total: order.totalPrice });
-    } catch (error) { setMessage((error as Error).message); }
-    finally { setBusy(false); }
+      const { url } = await api(`${base}/checkout/initiate`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
+      window.location.assign(url);
+    } catch (error) { setMessage((error as Error).message); setBusy(false); }
   }
 
+  // Back from Adyen: poll until the BFF confirms payment and returns the Order (about 2s apart, up to ~2 minutes).
+  useEffect(() => {
+    const paymentRef = new URLSearchParams(window.location.search).get('paymentRef');
+    if (!paymentRef || !storeKey) return;
+    setVerifying(true);
+    let stopped = false;
+    (async () => {
+      for (let attempt = 0; attempt < 60 && !stopped; attempt++) {
+        try {
+          const result = await api(`${base}/order/payment/status?paymentRef=${encodeURIComponent(paymentRef)}`);
+          if (result.status === 'paid') {
+            localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
+            setPlaced({ orderNumber: result.order.orderNumber ?? result.order.id, total: result.order.totalPrice });
+            window.history.replaceState(null, '', '/checkout');
+            return;
+          }
+        } catch (error) { setMessage((error as Error).message); return; }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      if (!stopped) setMessage('We have not received payment confirmation yet. Please check again shortly.');
+    })().finally(() => { if (!stopped) setVerifying(false); });
+    return () => { stopped = true; };
+  }, [storeKey]);
+
+  if (verifying) return <Loader label="Confirming your payment…" note="We are processing your payment. Please do not close or refresh this browser tab." />;
   if (!ready) return <Loader label="Loading…" />;
-  if (placed) return <main><section className="checkoutPanel"><h1>Thank you, your order is placed</h1><p>Order number <strong>{placed.orderNumber}</strong> · {money(placed.total)}</p><p>No payment was taken. We will confirm your order shortly.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
+  if (placed) return <main><section className="checkoutPanel"><h1>Thank you, your order is placed</h1><p>Order number <strong>{placed.orderNumber}</strong> · {money(placed.total)}</p><p>Your payment was received.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
   if (!cart?.lineItems.length) return <main><section className="checkoutPanel"><h1>Checkout</h1><p>Your cart is empty.</p><Link className="button" href="/">Continue shopping</Link></section></main>;
 
   const readyToPay = !!cart.shippingInfo && methods.length > 0;
@@ -91,9 +116,9 @@ export default function Checkout() {
         </form>
         {methods.length > 0 && <section className="checkoutPanel"><h2>4. Delivery method</h2>
           {methods.map(method => <label className="check" key={method.id}><input type="radio" name="delivery" checked={method.id === methodId} onChange={() => chooseMethod(method.id)} /> {method.name}</label>)}</section>}
-        {readyToPay && <section className="checkoutPanel"><h2>5. Place order</h2>
-          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}. No payment is taken now; the order is saved in commercetools.</p>
-          <button className="checkoutButton" disabled={busy} onClick={placeOrder}>Place order</button></section>}
+        {readyToPay && <section className="checkoutPanel"><h2>5. Payment</h2>
+          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}. You will be taken to Adyen's secure page to pay.</p>
+          <button className="checkoutButton" disabled={busy} onClick={pay}>Pay with Adyen</button></section>}
         {message && <p className="error" role="alert">{message}</p>}
       </div>
       <aside>

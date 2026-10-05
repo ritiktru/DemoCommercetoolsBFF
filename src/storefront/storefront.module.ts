@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Inject, Module, Param, Post, Req, UseGuards, type DynamicModule } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Patch, Inject, Module, Param, Post, Query, Req, UseGuards, type DynamicModule } from '@nestjs/common';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { AuthService, OriginGuard } from '../auth.js';
@@ -67,12 +67,19 @@ export class StorefrontController {
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
     return this.storefront.createCheckoutSession(key.data, input.data.cartId, this.optionalCustomer(req));
   }
-  @Post('stores/:storeKey/orders') @UseGuards(OriginGuard)
-  placeOrder(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+  @Post('stores/:storeKey/checkout/initiate') @UseGuards(OriginGuard)
+  initiateCheckout(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw); const input = z.strictObject({ cartId: z.uuid() }).safeParse(body);
     if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cartId');
-    return this.storefront.placeOrder(key.data, input.data.cartId, this.optionalCustomer(req));
+    return this.storefront.initiateCheckout(key.data, input.data.cartId, this.optionalCustomer(req));
+  }
+  @Get('stores/:storeKey/order/payment/status')
+  paymentStatus(@Param('storeKey') raw: string, @Query('paymentRef') ref: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const paymentRef = z.string().regex(/^PAY-[0-9a-f-]{36}$/).safeParse(ref);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!paymentRef.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid paymentRef');
+    return this.storefront.paymentStatus(key.data, paymentRef.data, this.optionalCustomer(req));
   }
   @Post('stores/:storeKey/checkout-address') @UseGuards(OriginGuard)
   checkoutAddress(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
@@ -98,9 +105,15 @@ export class StorefrontController {
   }
   private optionalCustomer(req: Request) { try { return this.auth.customer(req); } catch (error) { if (error instanceof CommerceError && error.status === 401) return undefined; throw error; } }
 }
+// Server-to-server from Adyen: authenticated by HMAC signature, not by origin or session.
+@Controller('api/orders')
+export class PaymentWebhookController {
+  constructor(@Inject(SERVICE) private readonly storefront: StorefrontService) {}
+  @Post('webhook') @HttpCode(200) webhook(@Body() body: unknown) { return this.storefront.handlePaymentWebhook(body); }
+}
 @Module({})
 export class StorefrontModule {
   static register(service: StorefrontService, auth: DynamicModule): DynamicModule {
-    return { module: StorefrontModule, imports: [auth], controllers: [StorefrontController], providers: [{ provide: SERVICE, useValue: service }] };
+    return { module: StorefrontModule, imports: [auth], controllers: [StorefrontController, PaymentWebhookController], providers: [{ provide: SERVICE, useValue: service }] };
   }
 }

@@ -37,6 +37,8 @@ export interface StorefrontService {
   setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer): Promise<unknown>;
   listCheckoutShippingMethods(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
   setCheckoutShippingMethod(storeKey: string, cartId: string, shippingMethodId: string, customer?: SessionCustomer): Promise<unknown>;
-  placeOrder(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
+  initiateCheckout(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
+  paymentStatus(storeKey: string, paymentRefId: string, customer?: SessionCustomer): Promise<unknown>;
+  handlePaymentWebhook(body: unknown): unknown;
   createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
 }

@@ -26,6 +26,13 @@ const schema = z.object({
   SMTP_PASS: z.preprocess(blank, z.string().optional()),
   MAIL_FROM: z.preprocess(blank, z.string().trim().min(3).optional()),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  // Adyen Hosted Checkout (TEST). HMAC key is only needed for the real /api/orders/webhook.
+  ADYEN_API_KEY: z.preprocess(blank, z.string().min(1).optional()),
+  ADYEN_MERCHANT_ACCOUNT: z.preprocess(blank, z.string().trim().min(1).optional()),
+  ADYEN_HMAC_KEY: z.preprocess(blank, z.string().regex(/^[0-9A-Fa-f]+$/).optional()),
+  // POC: payment-status reports "paid" this long after the first poll, standing in for the webhook.
+  PAYMENT_SIMULATED_DELAY_MS: z.preprocess(blank, z.coerce.number().int().min(0).default(8000)),
+  PAYMENT_STORE_PATH: z.preprocess(blank, z.string().default('data/transactions.json')),
 });
 export type Config = z.infer<typeof schema>;
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
