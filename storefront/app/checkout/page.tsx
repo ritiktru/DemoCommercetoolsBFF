@@ -81,6 +81,11 @@ export default function Checkout() {
       for (let attempt = 0; attempt < 60 && !stopped; attempt++) {
         try {
           const result = await api(`${base}/order/payment/status?paymentRef=${encodeURIComponent(paymentRef)}`);
+          if (result.status === 'failed') {
+            setMessage(`Payment was not completed${result.reason ? `: ${result.reason}` : ''}. Please try again.`);
+            window.history.replaceState(null, '', '/checkout');
+            return;
+          }
           if (result.status === 'paid') {
             localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
             setPlaced({ orderNumber: result.order.orderNumber ?? result.order.id, total: result.order.totalPrice });

@@ -309,7 +309,6 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       let body: unknown = text.slice(0, 1000);
       try { body = JSON.parse(text); } catch { /* not JSON */ }
       console.error(`[adyen] /sessions HTTP ${response.status} pspReference=${response.headers.get('pspreference') ?? 'none'}`, body);
-      throw new CommerceError(502, `[adyen] /sessions HTTP ${response.status} pspReference=${response.headers.get('pspreference') ?? 'none'}`, JSON.stringify(body))
     }
     if (!response?.ok) throw new CommerceError(502, 'PaymentSessionFailed', 'Unable to start payment with Adyen');
     const session = z.object({ id: z.string().min(1), url: z.url() }).parse(await response.json());
@@ -322,12 +321,9 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     const txn = this.transactions.find(paymentRefId);
     if (!txn || txn.storeKey !== storeKey) throw new CommerceError(404, 'PaymentNotFound', 'Payment not found');
     if (txn.order) return { status: 'paid', order: txn.order };
-    if (txn.status === 'pending') {
-      // ponytail: simulated webhook — any return from the hosted page counts as paid after the delay, even a cancel. Real fix: GET /sessions/{id}?sessionResult= or the HMAC webhook.
-      txn.firstPolledAt ??= Date.now();
-      if (Date.now() - txn.firstPolledAt < this.config.PAYMENT_SIMULATED_DELAY_MS) { this.transactions.save(txn); return { status: 'pending' }; }
-      txn.status = 'paid'; this.transactions.save(txn);
-    }
+    // Only the HMAC-verified webhook moves a payment out of pending.
+    if (txn.status === 'pending') return { status: 'pending' };
+    if (txn.status === 'failed') return { status: 'failed', reason: txn.reason };
     // Concurrent polls share one order creation so the cart is never ordered twice.
     let pending = this.ordering.get(paymentRefId);
     if (!pending) {
@@ -355,7 +351,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return txn.order;
   }
 
-  // Step 4: Adyen AUTHORISATION webhook. Not reachable on localhost; the simulated path in paymentStatus covers the POC.
+  // Step 4: Adyen webhook. Adyen retries until it gets 2xx, so this must stay idempotent.
   handlePaymentWebhook(body: unknown) {
     if (!this.config.ADYEN_HMAC_KEY) throw new CommerceError(503, 'WebhookNotConfigured', 'Set ADYEN_HMAC_KEY');
     const items = (body as { notificationItems?: Array<{ NotificationRequestItem?: AdyenNotificationItem }> })?.notificationItems?.map(i => i.NotificationRequestItem);
@@ -364,12 +360,16 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     }
     for (const item of items as AdyenNotificationItem[]) {
       const txn = this.transactions.find(item.merchantReference);
+      // Unknown references (e.g. Adyen's "Test configuration" event) and events for another session are ignored.
       if (!txn) continue;
-      // Every verified event is recorded; only a successful AUTHORISATION for the exact amount marks it paid.
-      const authorised = item.eventCode === 'AUTHORISATION' && item.success === 'true' &&
-        item.amount.value === txn.amount.centAmount && item.amount.currency === txn.amount.currencyCode;
+      const sessionId = item.additionalData?.checkoutSessionId;
+      if (sessionId && sessionId !== txn.transaction_token) continue;
+      // Every verified event is recorded; only the first AUTHORISATION decides paid or failed.
+      const decides = item.eventCode === 'AUTHORISATION' && txn.status === 'pending';
+      const amountMatches = item.amount.value === txn.amount.centAmount && item.amount.currency === txn.amount.currencyCode;
       this.transactions.save({ ...txn, eventCode: item.eventCode, payment_method: item.paymentMethod ?? txn.payment_method,
-        ...(authorised && { status: 'paid' as const, pspReference: item.pspReference }) });
+        ...(decides && item.success === 'true' && amountMatches && { status: 'paid' as const, pspReference: item.pspReference }),
+        ...(decides && item.success !== 'true' && { status: 'failed' as const, pspReference: item.pspReference, reason: item.reason }) });
     }
     return '[accepted]';
   }

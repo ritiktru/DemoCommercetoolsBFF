@@ -5,10 +5,10 @@ import { dirname } from 'node:path';
 type Money = { currencyCode: string; centAmount: number };
 export type Transaction = {
   cartId: string; payment_ref_id: string; transaction_token: string;
-  storeKey: string; amount: Money; status: 'pending' | 'paid';
-  firstPolledAt?: number; pspReference?: string;
+  storeKey: string; amount: Money; status: 'pending' | 'paid' | 'failed';
+  pspReference?: string;
   // From the latest verified Adyen webhook for this payment.
-  payment_method?: string; eventCode?: string;
+  payment_method?: string; eventCode?: string; reason?: string;
   order?: { id: string; orderNumber?: string; totalPrice: Money };
 };
 
@@ -30,7 +30,8 @@ export class TransactionStore {
 // Adyen standard-notification HMAC: https://docs.adyen.com/development-resources/webhooks/verify-hmac-signatures
 export type AdyenNotificationItem = {
   pspReference: string; originalReference?: string; merchantAccountCode: string; merchantReference: string;
-  amount: { value: number; currency: string }; eventCode: string; success: string; paymentMethod?: string; additionalData?: { hmacSignature?: string };
+  amount: { value: number; currency: string }; eventCode: string; success: string; paymentMethod?: string; reason?: string;
+  additionalData?: { hmacSignature?: string; checkoutSessionId?: string };
 };
 export function validAdyenHmac(item: AdyenNotificationItem, hexKey: string) {
   const payload = [item.pspReference, item.originalReference ?? '', item.merchantAccountCode, item.merchantReference,
