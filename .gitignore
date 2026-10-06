@@ -6,3 +6,9 @@ coverage/
 .DS_Store
 storefront/AGENTS.md
 storefront/CLAUDE.md
+build/
+.next/
+out/
+storefront/.next/
+
+

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
-import type { AddItemInput, CheckoutAddressInput, BillingAddressInput, StorefrontService } from './storefront/storefront.js';
+import { storeKeySchema, type AddItemInput, type CheckoutAddressInput, type BillingAddressInput, type StorefrontService } from './storefront/storefront.js';
 
 export const customerInput = z.strictObject({
   email: z.email().max(254),
@@ -98,6 +98,17 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       ...init, redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { Authorization: `Bearer ${await this.accessToken()}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
     });
+  }
+
+  async listStores() {
+    const response = await this.commerce('/stores?limit=500');
+    if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Stores');
+    const result = z.object({ results: z.array(z.object({ key: z.string(), name: z.record(z.string(), z.string()).optional(), productSelections: z.array(z.object({ active: z.boolean() })).default([]) })) }).parse(await response.json());
+    const stores = result.results
+      .filter(store => storeKeySchema.safeParse(store.key).success && store.productSelections.some(selection => selection.active))
+      .map(store => ({ key: store.key, name: store.name?.['en-CA'] ?? store.name?.['en-US'] ?? Object.values(store.name ?? {})[0] ?? store.key }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    return { stores };
   }
 
   async listStoreProducts(storeKey: string) {
@@ -200,7 +211,19 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     const response = await this.commerce(`/shipping-methods/matching-cart?cartId=${encodeURIComponent(cartId)}`);
     if (!response.ok) throw new CommerceError(502, 'ShippingMethodsFailed', 'Unable to load shipping methods');
     const result = z.object({ results: z.array(z.object({ id: z.string(), name: z.string(), isDefault: z.boolean().optional() })) }).parse(await response.json());
-    return { shippingMethods: result.results };
+    const activePass = this.config.DELIVERY_PASS_SHIPPING_METHOD_ID && customer ? await this.hasActiveDeliveryPass(customer.id) : false;
+    const shippingMethods = this.config.DELIVERY_PASS_SHIPPING_METHOD_ID && !activePass
+      ? result.results.filter(method => method.id !== this.config.DELIVERY_PASS_SHIPPING_METHOD_ID)
+      : result.results;
+    return { shippingMethods };
+  }
+
+  private async hasActiveDeliveryPass(customerId: string) {
+    const response = await this.commerce(`/customers/${encodeURIComponent(customerId)}`);
+    if (!response.ok) return false;
+    const customer = z.object({ custom: z.object({ fields: z.record(z.string(), z.unknown()).default({}) }).optional() }).parse(await response.json());
+    const fields = customer.custom?.fields ?? {};
+    return fields.deliveryPassActive === true && typeof fields.deliveryPassExpiresAt === 'string' && Date.parse(fields.deliveryPassExpiresAt) > Date.now();
   }
 
   async setCheckoutShippingMethod(storeKey: string, cartId: string, shippingMethodId: string, customer?: SessionCustomer) {
@@ -234,6 +257,74 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     if (!sessionResponse.ok) throw new CommerceError(502, 'CheckoutSessionFailed', 'Unable to create Checkout Session');
     const result = z.object({ id: z.string().min(1) }).parse(await sessionResponse.json());
     return { sessionId: result.id };
+  }
+
+  async getDeliveryPass() {
+    const response = await this.commerce(`/product-projections/key=${encodeURIComponent(this.config.DELIVERY_PASS_PRODUCT_KEY)}?priceCurrency=CAD&priceCountry=CA`);
+    if (!response.ok) throw new CommerceError(404, 'DeliveryPassNotFound', 'Delivery Pass product not found');
+    const product = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }) }) }).parse(await response.json());
+    return { product: { id: product.id, key: product.key, name: product.name.en ?? product.name['en-CA'] ?? Object.values(product.name)[0], sku: product.masterVariant.sku, price: product.masterVariant.price.value } };
+  }
+
+  async createDeliveryPassCart(customer: SessionCustomer) {
+    const pass = await this.getDeliveryPass();
+    // Store-associated customers cannot own a cart without a Store. The BFF
+    // creates a guest cart tied to the signed-in customer's verified email.
+    const response = await this.commerce('/carts', { method: 'POST', body: JSON.stringify({ currency: 'CAD', country: 'CA', customerEmail: customer.email }) });
+    await this.checkCartResponse(response);
+    const created = cartSchema.parse(await response.json());
+    const updated = await this.commerce(`/carts/${encodeURIComponent(created.id)}`, { method: 'POST', body: JSON.stringify({ version: created.version, actions: [{ action: 'addLineItem', sku: pass.product.sku, quantity: 1 }] }) });
+    await this.checkCartResponse(updated);
+    return { cart: cartSchema.parse(await updated.json()) };
+  }
+
+  async setDeliveryPassAddress(input: CheckoutAddressInput, customer: SessionCustomer) {
+    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`);
+    await this.checkCartResponse(response);
+    const cartBody = await response.json();
+    const cart = cartSchema.parse(cartBody);
+    const owner = z.object({ customerEmail: z.string().optional() }).parse(cartBody);
+    if (cart.customerId || owner.customerEmail?.toLowerCase() !== customer.email.toLowerCase()) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
+    const state = /^on(tario)?$/i.test(input.address.state) ? 'Ontario' : input.address.state;
+    const address = { ...input.address, state, country: 'CA', email: input.email };
+    const updated = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: cart.version, actions: [{ action: 'setShippingAddress', address }, { action: 'setBillingAddress', address }] }) });
+    await this.checkCartResponse(updated);
+    return { cart: cartSchema.parse(await updated.json()) };
+  }
+
+  async createDeliveryPassCheckoutSession(cartId: string, customer: SessionCustomer) {
+    if (!this.config.CT_CHECKOUT_SESSION_URL || !this.config.CT_CHECKOUT_APPLICATION_KEY) throw new CommerceError(503, 'CheckoutNotConfigured', 'Set Checkout configuration');
+    const response = await this.commerce(`/carts/${encodeURIComponent(cartId)}`);
+    await this.checkCartResponse(response);
+    const cartBody = await response.json();
+    const cart = cartSchema.parse(cartBody);
+    const owner = z.object({ customerEmail: z.string().optional(), shippingAddress: z.unknown().optional(), billingAddress: z.unknown().optional() }).parse(cartBody);
+    if (cart.customerId || owner.customerEmail?.toLowerCase() !== customer.email.toLowerCase()) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
+    if (!owner.shippingAddress || !owner.billingAddress) throw new CommerceError(400, 'CheckoutNotReady', 'Save the delivery address before continuing to payment');
+    const session = await this.fetcher(`${this.config.CT_CHECKOUT_SESSION_URL.replace(/\/$/, '')}/${encodeURIComponent(this.config.CT_PROJECT_KEY)}/sessions`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000), headers: { Authorization: `Bearer ${await this.accessToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ cart: { cartRef: { id: cartId } }, metadata: { applicationKey: this.config.CT_CHECKOUT_APPLICATION_KEY } }) });
+    if (!session.ok) throw new CommerceError(502, 'CheckoutSessionFailed', 'Unable to create Checkout Session');
+    return { sessionId: z.object({ id: z.string() }).parse(await session.json()).id };
+  }
+
+  async activateDeliveryPass(orderId: string, customer: SessionCustomer) {
+    const orderResponse = await this.commerce(`/orders/${encodeURIComponent(orderId)}`);
+    if (!orderResponse.ok) throw new CommerceError(404, 'OrderNotFound', 'Order not found');
+    const order = z.object({ id: z.string(), customerId: z.string().optional(), customerEmail: z.string().optional(), lineItems: z.array(z.object({ variant: z.object({ sku: z.string().optional() }) })) }).parse(await orderResponse.json());
+    const belongsToCustomer = order.customerId === customer.id || (!order.customerId && order.customerEmail?.toLowerCase() === customer.email.toLowerCase());
+    if (!belongsToCustomer) throw new CommerceError(404, 'OrderNotFound', 'Order not found');
+    if (!order.lineItems.some(item => item.variant.sku === this.config.DELIVERY_PASS_SKU)) throw new CommerceError(400, 'DeliveryPassNotPurchased', 'This order does not contain a Delivery Pass');
+    const customerResponse = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`);
+    if (!customerResponse.ok) throw new CommerceError(404, 'CustomerNotFound', 'Customer not found');
+    const current = z.object({ version: z.number(), custom: z.object({ type: z.object({ key: z.string().optional() }).optional(), fields: z.record(z.string(), z.unknown()).default({}) }).optional() }).parse(await customerResponse.json());
+    const expiresAt = new Date();
+    expiresAt.setUTCMonth(expiresAt.getUTCMonth() + this.config.DELIVERY_PASS_DURATION_MONTHS);
+    const fields = { deliveryPassActive: true, deliveryPassExpiresAt: expiresAt.toISOString(), deliveryPassOrderId: order.id };
+    const actions = current.custom?.type?.key === this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY
+      ? Object.entries(fields).map(([name, value]) => ({ action: 'setCustomField', name, value }))
+      : [{ action: 'setCustomType', type: { typeId: 'type', key: this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY }, fields }];
+    const updated = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`, { method: 'POST', body: JSON.stringify({ version: current.version, actions }) });
+    if (!updated.ok) throw new CommerceError(502, 'DeliveryPassActivationFailed', 'Unable to activate Delivery Pass');
+    return { active: true, expiresAt: expiresAt.toISOString(), orderId: order.id };
   }
 
   async createCustomer(input: CustomerInput): Promise<CustomerResult> {

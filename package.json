@@ -16,7 +16,8 @@
     "catalog:products": "node --import tsx scripts/import-products.ts",
     "catalog:poc-prices": "node --import tsx scripts/map-poc-prices.ts",
     "catalog:selections": "node --import tsx scripts/import-product-selections.ts",
-    "stores:import": "node --import tsx scripts/import-stores.ts"
+    "stores:import": "node --import tsx scripts/import-stores.ts",
+    "delivery-pass:setup": "node --import tsx scripts/setup-delivery-pass.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",

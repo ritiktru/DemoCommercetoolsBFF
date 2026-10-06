@@ -30,14 +30,18 @@ export default function Home() {
   const [shippingMethods, setShippingMethods] = useState<ShippingMethod[]>([]);
   const [shippingMethodId, setShippingMethodId] = useState('');
   const [busy, setBusy] = useState(false);
+  const [deliveryPassCart, setDeliveryPassCart] = useState(false);
+  const [checkoutAddressSaved, setCheckoutAddressSaved] = useState(false);
+  const [deliveryPass, setDeliveryPass] = useState<{ name: string; sku: string; price: Money }>();
 
   useEffect(() => {
     api('/api/storefront/stores').then(data => { setStores(data.stores); setStoreKey(data.stores[0]?.key ?? ''); }).catch(error => setStatus(error.message));
     api('/api/auth/me').then(data => { setCustomer(data.customer); setEmail(data.customer.email); }).catch(() => undefined);
+    api('/api/storefront/delivery-pass').then(data => setDeliveryPass(data.product)).catch(() => undefined);
   }, []);
   useEffect(() => {
     if (!storeKey) return;
-    setCart(undefined); setShowCheckout(false); setShippingMethods([]); setShippingMethodId(''); setStatus('Loading assortment…');
+    setCart(undefined); setShowCheckout(false); setShippingMethods([]); setShippingMethodId(''); setCheckoutAddressSaved(false); setDeliveryPassCart(false); setStatus('Loading assortment…');
     api(`/api/storefront/stores/${storeKey}/products`).then(data => { setProducts(data.products); setStatus(`${data.products.length} products available`); }).catch(error => setStatus(error.message));
   }, [storeKey]);
 
@@ -62,8 +66,15 @@ export default function Home() {
     try {
       const current: Cart = cart ?? (await api(`/api/storefront/stores/${storeKey}/carts`, { method: 'POST', body: '{}' })).cart;
       const data = await api(`/api/storefront/stores/${storeKey}/cart-items`, { method: 'POST', body: JSON.stringify({ cartId: current.id, version: current.version, sku: product.sku, quantity: 1 }) });
-      setCart(data.cart); setShowCheckout(false); setShippingMethods([]); setStatus(`${product.name} added to cart.`);
+      setDeliveryPassCart(false); setCheckoutAddressSaved(false); setCart(data.cart); setShowCheckout(false); setShippingMethods([]); setStatus(`${product.name} added to cart.`);
     } catch (error) { setStatus((error as Error).message); }
+    finally { setBusy(false); }
+  }
+  async function buyDeliveryPass() {
+    if (!customer) { setStatus('Sign in before purchasing a Delivery Pass.'); return; }
+    setBusy(true);
+    try { const data = await api('/api/storefront/delivery-pass/cart', { method: 'POST', body: JSON.stringify({ storeKey }) }); setDeliveryPassCart(true); setCheckoutAddressSaved(false); setCart(data.cart); setShowCheckout(true); setStatus('Delivery Pass cart created. Enter your address to continue.'); }
+    catch (error) { setStatus((error as Error).message); }
     finally { setBusy(false); }
   }
 
@@ -74,8 +85,10 @@ export default function Home() {
     if (!cart) return;
     setBusy(true);
     try {
-      const data = await api(`/api/storefront/stores/${storeKey}/checkout-address`, { method: 'POST', body: JSON.stringify({ cartId: cart.id, email, address }) });
+      const data = await api(deliveryPassCart ? '/api/storefront/delivery-pass/address' : `/api/storefront/stores/${storeKey}/checkout-address`, { method: 'POST', body: JSON.stringify({ cartId: cart.id, email, address }) });
       setCart(data.cart);
+      setCheckoutAddressSaved(true);
+      if (deliveryPassCart) { setShippingMethods([]); setShippingMethodId(''); setStatus('Address saved. Continue to payment.'); return; }
       const methods = await api(`/api/storefront/stores/${storeKey}/carts/${cart.id}/shipping-methods`);
       setShippingMethods(methods.shippingMethods);
       setShippingMethodId(methods.shippingMethods.find((method: ShippingMethod) => method.isDefault)?.id ?? methods.shippingMethods[0]?.id ?? '');
@@ -85,15 +98,23 @@ export default function Home() {
   }
 
   async function pay() {
-    if (!cart || !shippingMethodId) return;
+    if (!cart || (!deliveryPassCart && !shippingMethodId)) return;
     setBusy(true);
     try {
-      const selected = await api(`/api/storefront/stores/${storeKey}/checkout-shipping`, { method: 'POST', body: JSON.stringify({ cartId: cart.id, shippingMethodId }) });
-      setCart(selected.cart);
-      const data = await api(`/api/storefront/stores/${storeKey}/checkout-session`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
+      if (!deliveryPassCart) { const selected = await api(`/api/storefront/stores/${storeKey}/checkout-shipping`, { method: 'POST', body: JSON.stringify({ cartId: cart.id, shippingMethodId }) }); setCart(selected.cart); }
+      const data = await api(deliveryPassCart ? '/api/storefront/delivery-pass/checkout-session' : `/api/storefront/stores/${storeKey}/checkout-session`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
       if (!window.ctc) await new Promise<void>((resolve, reject) => { const script = document.createElement('script'); script.src = 'https://unpkg.com/@commercetools/checkout-browser-sdk@latest/browser/sdk.js'; script.onload = () => resolve(); script.onerror = () => reject(new Error('Checkout SDK failed to load')); document.head.appendChild(script); });
       if (!window.ctc) throw new Error('Checkout SDK is unavailable');
-      window.ctc('paymentFlow', { projectKey: 'sobeys-dev', region: 'us-central1.gcp', sessionId: data.sessionId, locale: 'en-CA', logInfo: true, logWarn: true, logError: true });
+      window.ctc('paymentFlow', { projectKey: 'sobeys-dev', region: 'us-central1.gcp', sessionId: data.sessionId, locale: 'en', logInfo: true, logWarn: true, logError: true,
+        onInfo: (message: { code?: string; payload?: unknown }) => {
+          if (message.code !== 'checkout_completed') return;
+          const orderId = (message.payload as { order?: { id?: string } } | undefined)?.order?.id;
+          if (!orderId) return;
+          api('/api/storefront/delivery-pass/activate', { method: 'POST', body: JSON.stringify({ orderId }) })
+            .then(result => setStatus(result.active ? `Delivery Pass active until ${new Date(result.expiresAt).toLocaleDateString('en-CA')}.` : 'Order confirmed.'))
+            .catch(error => setStatus(`Order confirmed, but Delivery Pass activation needs attention: ${(error as Error).message}`));
+        },
+      });
       setStatus('Checkout payment is ready.');
     } catch (error) { setStatus((error as Error).message); }
     finally { setBusy(false); }
@@ -101,7 +122,7 @@ export default function Home() {
 
   return <main>
     <header><div><span className="eyebrow">COMMERCE POC</span><h1>Fresh picks by store</h1><p>Select a Sobeys location to test Store-scoped assortments, Channel prices, and carts.</p></div><div className="account">{customer ? <><span>Signed in</span><strong>{customer.email}</strong></> : <><button onClick={signIn}>Sign in with Google</button><div id="google-signin" /></>}</div></header>
-    <section className="toolbar"><label>Shopping at<select value={storeKey} onChange={event => setStoreKey(event.target.value)}>{stores.map(store => <option key={store.key} value={store.key}>{store.name} ({store.key.replace('sobeys-', '')})</option>)}</select></label><div className="status" role="status">{status}</div></section>
+    <section className="toolbar"><label>Shopping at<select value={storeKey} onChange={event => setStoreKey(event.target.value)}>{stores.map(store => <option key={store.key} value={store.key}>{store.name} ({store.key.replace('sobeys-', '')})</option>)}</select></label>{deliveryPass && <button disabled={busy} onClick={buyDeliveryPass}>Buy Delivery Pass · {money(deliveryPass.price)}</button>}<div className="status" role="status">{status}</div></section>
     <div className="layout"><section><div className="sectionTitle"><h2>Available products</h2><span>{products.length} items</span></div><div className="grid">{products.map(product => <article key={product.id}><div className="image">{String(product.brand ?? 'Sobeys').slice(0, 1)}</div><span className="brand">{String(product.brand ?? 'Grocery')}</span><h3>{product.name}</h3><p className="sku">SKU {product.sku}</p><div className="productFooter"><strong>{money(product.price)}</strong><button disabled={!product.price || busy} onClick={() => add(product)}>Add</button></div></article>)}</div></section>
       <aside><div className="cartHead"><h2>Your cart</h2><span>{cart?.lineItems.reduce((sum, item) => sum + item.quantity, 0) ?? 0}</span></div>{!cart?.lineItems.length ? <div className="empty"><div>🛒</div><p>Your selected products will appear here.</p></div> : <>{cart.lineItems.map(item => <div className="cartItem" key={item.id}><div><strong>{item.name['en-CA'] ?? Object.values(item.name)[0]}</strong><small>{item.variant.sku} · Qty {item.quantity}</small></div><span>{money(item.totalPrice)}</span></div>)}<div className="total"><span>Total</span><strong>{money(cart.totalPrice)}</strong></div><button className="checkoutButton" disabled={busy} onClick={() => setShowCheckout(true)}>Checkout</button></>}</aside></div>
     {showCheckout && cart && <section className="checkoutPanel"><h2>Checkout</h2><p>Enter your delivery address. Billing uses the same address for this demo.</p>
@@ -115,7 +136,7 @@ export default function Home() {
         <label>Postal code<input required placeholder="M5V 1A1" value={address.postalCode} onChange={event => updateAddress('postalCode', event.target.value)} /></label>
         <div className="checkoutActions"><button disabled={busy} type="submit">Save address and find delivery</button></div>
       </form>
-      {shippingMethods.length > 0 && <div className="shippingChoice"><label>Delivery method<select value={shippingMethodId} onChange={event => setShippingMethodId(event.target.value)}>{shippingMethods.map(method => <option key={method.id} value={method.id}>{method.name}</option>)}</select></label><button disabled={busy || !shippingMethodId} onClick={pay}>Continue to payment</button></div>}
+      {((deliveryPassCart && checkoutAddressSaved) || shippingMethods.length > 0) && <div className="shippingChoice">{!deliveryPassCart && <label>Delivery method<select value={shippingMethodId} onChange={event => setShippingMethodId(event.target.value)}>{shippingMethods.map(method => <option key={method.id} value={method.id}>{method.name}</option>)}</select></label>}<button disabled={busy || (!deliveryPassCart && !shippingMethodId)} onClick={pay}>Continue to payment</button></div>}
     </section>}
   </main>;
 }
