@@ -25,13 +25,18 @@ function fakeCommerce() {
     shippingAddress: { country: 'CA' }, shippingInfo: { shippingMethodName: 'Standard' },
     createdAt: '2026-10-05T00:00:00Z', lastModifiedAt: '2026-10-05T00:00:00Z',
   };
-  const calls = { sessions: [] as any[], orders: [] as any[] };
+  const calls = { sessions: [] as any[], orders: [] as any[], results: [] as string[] };
   const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
     const path = String(url).split('?')[0]!;
     if (path.endsWith('/oauth/token')) return Response.json({ access_token: 'fake-token', expires_in: 3600 });
     if (path === 'https://checkout-test.adyen.com/v71/sessions') {
       calls.sessions.push(JSON.parse(String(init?.body)));
       return Response.json({ id: 'CS_TEST_1', url: 'https://checkoutshopper-test.adyen.com/checkoutshopper/pay/CS_TEST_1' });
+    }
+    if (path === 'https://checkout-test.adyen.com/v71/sessions/CS_TEST_1') {
+      calls.results.push(new URL(String(url)).searchParams.get('sessionResult')!);
+      // Shape captured from a real TEST session result.
+      return Response.json({ id: 'CS_TEST_1', status: 'completed', reference: 'PAY-x', payments: [{ amount: { currency: 'CAD', value: 3999 }, paymentMethod: { brand: 'visa', type: 'scheme' }, pspReference: 'CJ7CSHG2GPF28DV5', resultCode: 'Authorised' }] });
     }
     if (path.endsWith(`/carts/${cartId}`)) return Response.json(cart);
     if (path.endsWith('/orders')) {
@@ -54,6 +59,13 @@ test('hosted checkout: initiate, poll pending, then one paid Order carrying paym
   assert.equal(calls.sessions[0].returnUrl, `http://localhost:3000/checkout?paymentRef=${started.paymentRefId}`);
 
   assert.deepEqual(await client.paymentStatus(storeKey, started.paymentRefId), { status: 'pending' });
+  assert.equal(calls.results.length, 0);
+  // Back from Adyen: the poll carries sessionResult (Adyen's "!" kept) and the pspReference is fetched and saved once.
+  const sessionResult = 'Ab02b4c0!BQABAgBQ5h+/x=';
+  assert.deepEqual(await client.paymentStatus(storeKey, started.paymentRefId, sessionResult), { status: 'pending' });
+  await client.paymentStatus(storeKey, started.paymentRefId, sessionResult);
+  assert.deepEqual(calls.results, [sessionResult]);
+  assert.equal(JSON.parse(readFileSync(client['config'].PAYMENT_STORE_PATH, 'utf8')).transactions[0].transaction_id, 'CJ7CSHG2GPF28DV5');
   await new Promise(resolve => setTimeout(resolve, 60));
   const [first, second] = await Promise.all([client.paymentStatus(storeKey, started.paymentRefId), client.paymentStatus(storeKey, started.paymentRefId)]);
   assert.equal(first.status, 'paid');

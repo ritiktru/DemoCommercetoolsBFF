@@ -318,9 +318,14 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   }
 
   // Step 5: the storefront polls this; once payment is confirmed the Order is created exactly once.
-  async paymentStatus(storeKey: string, paymentRefId: string, customer?: SessionCustomer) {
+  async paymentStatus(storeKey: string, paymentRefId: string, sessionResult?: string, customer?: SessionCustomer) {
     const txn = this.transactions.find(paymentRefId);
     if (!txn || txn.storeKey !== storeKey) throw new CommerceError(404, 'PaymentNotFound', 'Payment not found');
+    // Adyen appends sessionResult to our returnUrl; trading it for the session result gives the payment's pspReference.
+    if (sessionResult && !txn.transaction_id) {
+      txn.transaction_id = await this.adyenPspReference(txn.transaction_token, sessionResult);
+      if (txn.transaction_id) this.transactions.save(txn);
+    }
     if (txn.order) return { status: 'paid', order: txn.order };
     if (txn.status === 'pending') {
       // ponytail: simulated webhook — any return from the hosted page counts as paid after the delay, even a cancel. Real fix: GET /sessions/{id}?sessionResult= or the HMAC webhook.
@@ -335,6 +340,19 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       this.ordering.set(paymentRefId, pending);
     }
     return { status: 'paid', order: await pending };
+  }
+
+  // GET /sessions/{id}?sessionResult= → { status, reference, payments: [{ pspReference, resultCode, amount, paymentMethod }] }.
+  // Best effort: on any failure it logs and returns undefined, and the next poll tries again.
+  private async adyenPspReference(sessionId: string, sessionResult: string) {
+    const response = await this.fetcher(`${ADYEN_CHECKOUT_URL}/sessions/${encodeURIComponent(sessionId)}?sessionResult=${encodeURIComponent(sessionResult)}`, {
+      redirect: 'error', signal: AbortSignal.timeout(15000), headers: { 'X-API-Key': this.config.ADYEN_API_KEY ?? '' },
+    }).catch((error: Error) => { console.error('[adyen] session result network error:', error.message, error.cause ?? ''); return undefined; });
+    if (!response) return undefined;
+    const text = await response.text().catch(() => '');
+    if (!response.ok) { console.error(`[adyen] session result HTTP ${response.status}`, text.slice(0, 1000)); return undefined; }
+    const result = z.object({ payments: z.array(z.object({ pspReference: z.string().min(1) })).optional() }).safeParse(JSON.parse(text || '{}'));
+    return result.success ? result.data.payments?.[0]?.pspReference : undefined;
   }
 
   private async createPaidOrder(txn: Transaction, customer?: SessionCustomer) {

@@ -73,14 +73,16 @@ export default function Checkout() {
 
   // Back from Adyen: poll until the BFF confirms payment and returns the Order (about 2s apart, up to ~2 minutes).
   useEffect(() => {
-    const paymentRef = new URLSearchParams(window.location.search).get('paymentRef');
+    // Adyen appends sessionId and sessionResult to our returnUrl; the BFF trades sessionResult for the pspReference.
+    const params = new URLSearchParams(window.location.search);
+    const paymentRef = params.get('paymentRef'); const sessionResult = params.get('sessionResult');
     if (!paymentRef || !storeKey) return;
     setVerifying(true);
     let stopped = false;
     (async () => {
       for (let attempt = 0; attempt < 60 && !stopped; attempt++) {
         try {
-          const result = await api(`${base}/order/payment/status?paymentRef=${encodeURIComponent(paymentRef)}`);
+          const result = await api(`${base}/order/payment/status?paymentRef=${encodeURIComponent(paymentRef)}${sessionResult ? `&sessionResult=${encodeURIComponent(sessionResult)}` : ''}`);
           if (result.status === 'paid') {
             localStorage.removeItem(`cart:${storeKey}`); setCart(undefined);
             setPlaced({ orderNumber: result.order.orderNumber ?? result.order.id, total: result.order.totalPrice });

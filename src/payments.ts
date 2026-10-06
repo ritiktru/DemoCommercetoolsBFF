@@ -7,6 +7,8 @@ export type Transaction = {
   cartId: string; payment_ref_id: string; transaction_token: string;
   storeKey: string; amount: Money; status: 'pending' | 'paid';
   firstPolledAt?: number; pspReference?: string;
+  // Adyen pspReference read from the session result when the shopper returns from the hosted page.
+  transaction_id?: string;
   // From the latest verified Adyen webhook for this payment.
   payment_method?: string; eventCode?: string;
   order?: { id: string; orderNumber?: string; totalPrice: Money };

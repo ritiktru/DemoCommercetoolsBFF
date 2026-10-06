@@ -75,11 +75,12 @@ export class StorefrontController {
     return this.storefront.initiateCheckout(key.data, input.data.cartId, this.optionalCustomer(req));
   }
   @Get('stores/:storeKey/order/payment/status')
-  paymentStatus(@Param('storeKey') raw: string, @Query('paymentRef') ref: unknown, @Req() req: Request) {
+  paymentStatus(@Param('storeKey') raw: string, @Query('paymentRef') ref: unknown, @Query('sessionResult') result: unknown, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw); const paymentRef = z.string().regex(/^PAY-[0-9a-f-]{36}$/).safeParse(ref);
+    const sessionResult = z.string().regex(/^[A-Za-z0-9!+/=_-]{1,8192}$/).optional().safeParse(result);
     if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
-    if (!paymentRef.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid paymentRef');
-    return this.storefront.paymentStatus(key.data, paymentRef.data, this.optionalCustomer(req));
+    if (!paymentRef.success || !sessionResult.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid paymentRef and optional sessionResult');
+    return this.storefront.paymentStatus(key.data, paymentRef.data, sessionResult.data, this.optionalCustomer(req));
   }
   @Post('stores/:storeKey/checkout-address') @UseGuards(OriginGuard)
   checkoutAddress(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
