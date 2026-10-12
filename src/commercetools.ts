@@ -33,6 +33,12 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   private pendingToken?: Promise<string>;
   constructor(private readonly config: Config, private readonly fetcher: typeof fetch = fetch) {}
 
+  private storeProvince(storeKey: string, store: unknown): string | undefined {
+    const configured = z.object({ address: z.object({ state: z.string().optional() }).optional() }).safeParse(store);
+    if (configured.success && configured.data.address?.state) return configured.data.address.state;
+    return ({ 'sobeys-0320': 'NL', 'sobeys-0657': 'ON' } as Record<string, string>)[storeKey];
+  }
+
   private async accessToken(): Promise<string> {
     if (this.token && this.token.expiresAt > Date.now()) return this.token.value;
     if (this.pendingToken) return this.pendingToken;
@@ -113,7 +119,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
 
   async listStoreProducts(storeKey: string) {
     const [assignments, channelResponse] = await Promise.all([
-      this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-selection-assignments?limit=100`),
+      this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-selection-assignments?limit=10`),
       this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
     ]);
     if (!assignments.ok || !channelResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store assortment');
@@ -157,11 +163,13 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   async createStoreCart(storeKey: string, customer?: SessionCustomer) {
     const storeResponse = await this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`);
     if (!storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to prepare Store cart');
+    const storeResource = await storeResponse.clone().json();
+    const province = this.storeProvince(storeKey, storeResource);
     if (customer) {
       const customerResponse = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`);
       if (!customerResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to prepare Store cart');
       const commerceCustomer = z.object({ version: z.number(), stores: z.array(z.object({ id: z.string().optional(), key: z.string().optional() })).default([]) }).parse(await customerResponse.json());
-      const store = z.object({ id: z.string() }).parse(await storeResponse.clone().json());
+      const store = z.object({ id: z.string() }).parse(storeResource);
       if (!commerceCustomer.stores.some(reference => reference.id === store.id || reference.key === storeKey)) {
         const linked = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`, { method: 'POST', body: JSON.stringify({ version: commerceCustomer.version, actions: [{ action: 'addStore', store: { typeId: 'store', id: store.id } }] }) });
         if (!linked.ok) {
@@ -180,19 +188,29 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
         }
       }
     }
+    const taxAddress = province ? { shippingAddress: { country: 'CA', state: province } } : {};
     const body = customer
-      ? { currency: 'CAD', country: 'CA', customerId: customer.id, customerEmail: customer.email, store: { typeId: 'store', key: storeKey } }
-      : { currency: 'CAD', country: 'CA', store: { typeId: 'store', key: storeKey } };
+      ? { currency: 'CAD', country: 'CA', customerId: customer.id, customerEmail: customer.email, store: { typeId: 'store', key: storeKey }, ...taxAddress }
+      : { currency: 'CAD', country: 'CA', store: { typeId: 'store', key: storeKey }, ...taxAddress };
     const response = await this.commerce('/carts', { method: 'POST', body: JSON.stringify(body) });
     await this.checkCartResponse(response); return { cart: cartSchema.parse(await response.json()) };
   }
 
   async addStoreCartItem(storeKey: string, input: AddItemInput, customer?: SessionCustomer) {
-    const existing = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`);
-    await this.checkCartResponse(existing); const cart = cartSchema.parse(await existing.json());
+    const [existing, storeResponse] = await Promise.all([
+      this.commerce(`/carts/${encodeURIComponent(input.cartId)}`),
+      this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`),
+    ]);
+    await this.checkCartResponse(existing); const raw = await existing.json(); const cart = cartSchema.parse(raw);
     if (customer ? cart.customerId !== customer.id : cart.customerId) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
     if (cart.version !== input.version) throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
-    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: input.version, actions: [{ action: 'addLineItem', sku: input.sku, quantity: input.quantity, distributionChannel: { typeId: 'channel', key: `${storeKey}-channel` }, supplyChannel: { typeId: 'channel', key: `${storeKey}-channel` } }] }) });
+    const shippingAddress = z.object({ shippingAddress: z.object({ country: z.string().optional(), state: z.string().optional() }).optional() }).parse(raw).shippingAddress;
+    const store = storeResponse.ok ? await storeResponse.json() : undefined;
+    const province = this.storeProvince(storeKey, store);
+    const actions: object[] = [];
+    if ((!shippingAddress?.country || !shippingAddress.state) && province) actions.push({ action: 'setShippingAddress', address: { country: 'CA', state: province } });
+    actions.push({ action: 'addLineItem', sku: input.sku, quantity: input.quantity, distributionChannel: { typeId: 'channel', key: `${storeKey}-channel` }, supplyChannel: { typeId: 'channel', key: `${storeKey}-channel` } });
+    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: input.version, actions }) });
     await this.checkCartResponse(response); return { cart: cartSchema.parse(await response.json()) };
   }
 
@@ -211,9 +229,10 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   async setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer) {
     const { cart } = await this.getCheckoutCart(storeKey, input.cartId, customer);
     if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add at least one product before checkout');
-    // commercetools tax rates match shippingAddress.state exactly; this POC's
-    // Canadian rate is configured as "Ontario", not the postal abbreviation "ON".
-    const state = /^on(tario)?$/i.test(input.address.state) ? 'Ontario' : input.address.state;
+    // Tax Rates use canonical Canadian province codes and state matching is exact.
+    const state = /^on(tario)?$/i.test(input.address.state) ? 'ON'
+      : /^(nl|newfoundland( and labrador)?)$/i.test(input.address.state) ? 'NL'
+      : input.address.state.toUpperCase();
     const address = { ...input.address, state, country: 'CA', email: input.email };
     const actions: object[] = [
       { action: 'setShippingAddress', address },

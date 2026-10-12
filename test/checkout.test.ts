@@ -43,8 +43,8 @@ test('Payment Only session requires address and shipping, then uses the prepared
       assert.equal(update.version, cart.version);
       if (update.actions[0]?.action === 'setShippingAddress') {
         assert.deepEqual(update.actions.map(action => action.action), ['setShippingAddress', 'setBillingAddress']);
-        assert.equal(update.actions[0]?.address?.state, 'Ontario');
-        assert.equal(update.actions[1]?.address?.state, 'Ontario');
+        assert.equal(update.actions[0]?.address?.state, 'ON');
+        assert.equal(update.actions[1]?.address?.state, 'ON');
         cart = { ...cart, version: cart.version + 1, shippingAddress: update.actions[0]!.address, billingAddress: update.actions[1]!.address };
       } else {
         assert.equal(update.actions[0]?.action, 'setShippingMethod');

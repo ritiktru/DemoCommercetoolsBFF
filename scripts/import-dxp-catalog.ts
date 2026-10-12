@@ -16,6 +16,21 @@ function valueFor(name: string, raw: Raw): unknown {
   if (name.startsWith('allergens-')) return raw.allergens?.[name.slice('allergens-'.length)];
   return raw[name];
 }
+function sourceTaxCategory(raw: Raw): string | undefined {
+  const today = new Date().toISOString().slice(0, 10);
+  const active = (Array.isArray(raw.taxes) ? raw.taxes : []).filter((tax: Raw) =>
+    (!tax.validFrom || String(tax.validFrom) <= today) && (!tax.validTo || String(tax.validTo) >= today));
+  if (active.length !== 1) return undefined;
+  const tax = active[0];
+  if (tax.ospTaxType === 'Z' && tax.taxConditional === 'N') return 'ca-zero-rated';
+  if (tax.ospTaxType === 'HST' && tax.taxCode1 === 'Y' && tax.taxConditional === 'N' && tax.taxQualifying === 'N' && !tax.ospAdditionalFlag) return 'ca-standard-taxable';
+  return undefined;
+}
+function productTaxCategory(rows: Iterable<Raw>): string | undefined {
+  const categories = [...rows].map(sourceTaxCategory);
+  if (!categories.length || categories.some(category => !category)) return undefined;
+  return new Set(categories).size === 1 ? categories[0] : undefined;
+}
 const numeric = new Set([
   'itemPackCount', 'numberOfItemsInPack', 'priceQuantity', 'milkFatContentRoundedOffPercentage',
   'moistureContentRoundedOffPercentage', 'scaleLabelFixedWeight', 'nutrition-calciumRoundedOffValue',
@@ -86,9 +101,10 @@ async function main() {
   }
   const resources = [...grouped.entries()].map(([identity, item]) => {
     const raw = item.raw; const article = String(raw.articleNumber); const uom = String(raw.uom);
+    const taxCategory = productTaxCategory(item.stores.values());
     const prices = [...item.stores.entries()].map(([storeId, row]) => ({ key: `price-${identity}-${storeId}`, value: { type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.max(0, Math.round(Number(row.price ?? 0) * 100)) }, country: 'CA', channel: { typeId: 'channel', key: `sobeys-${storeId}-channel` } }));
     const description = String(raw.description || '').trim();
-    return { key: `product-${identity}`, productType: { typeId: 'product-type', key: productTypeKey }, name: { 'en-CA': String(raw.name || `${article} ${uom}`) }, slug: { 'en-CA': `${slug(String(raw.pageSlug || raw.name || identity))}-${article}-${uom.toLowerCase()}`.slice(0, 256) }, ...(description ? { description: { 'en-CA': description } } : {}), masterVariant: { key: identity, sku: identity, attributes: attributes(raw), prices }, publish: true };
+    return { key: `product-${identity}`, productType: { typeId: 'product-type', key: productTypeKey }, name: { 'en-CA': String(raw.name || `${article} ${uom}`) }, slug: { 'en-CA': `${slug(String(raw.pageSlug || raw.name || identity))}-${article}-${uom.toLowerCase()}`.slice(0, 256) }, ...(description ? { description: { 'en-CA': description } } : {}), ...(taxCategory ? { taxCategory: { typeId: 'tax-category', key: taxCategory } } : {}), masterVariant: { key: identity, sku: identity, attributes: attributes(raw), prices }, publish: true };
   });
   const headers = { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' };
   const containerKey = `dxp-products-${Date.now()}`;
@@ -111,6 +127,6 @@ async function main() {
     if (batches.length >= 5) { const results = await Promise.all(batches.splice(0)); const failed = results.find(r => !r.ok); if (failed) throw new Error(`Product import request failed (${failed.status}): ${await failed.text()}`); }
   }
   const results = await Promise.all(batches); const failed = results.find(r => !r.ok); if (failed) throw new Error(`Product import request failed (${failed.status}): ${await failed.text()}`);
-  console.log(JSON.stringify({ status: 'submitted', products: resources.length, importContainer: containerKey, batches: Math.ceil(resources.length / 20), prices: resources.reduce((n, p) => n + p.masterVariant.prices.length, 0), nextStep: 'Monitor Import Summary, then assign product keys to Store Product Selections.' }, null, 2));
+  console.log(JSON.stringify({ status: 'submitted', products: resources.length, taxCategories: resources.reduce((counts, product: any) => { const key = product.taxCategory?.key ?? 'unassigned'; counts[key] = (counts[key] ?? 0) + 1; return counts; }, {} as Record<string, number>), importContainer: containerKey, batches: Math.ceil(resources.length / 20), prices: resources.reduce((n, p) => n + p.masterVariant.prices.length, 0), nextStep: 'Monitor Import Summary, then assign product keys to Store Product Selections.' }, null, 2));
 }
 main().catch(error => { console.error(error instanceof Error ? error.message : 'DXP import failed'); process.exitCode = 1; });
