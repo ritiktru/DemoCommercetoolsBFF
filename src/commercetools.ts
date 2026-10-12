@@ -130,6 +130,30 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { storeKey, products };
   }
 
+  async searchStoreProducts(storeKey: string, query: string, limit = 24, offset = 0) {
+    const [channelResponse, storeResponse] = await Promise.all([
+      this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
+      this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`),
+    ]);
+    if (!channelResponse.ok || !storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store references');
+    const channelId = z.object({ id: z.string() }).parse(await channelResponse.json()).id;
+    const storeId = z.object({ id: z.string() }).parse(await storeResponse.json()).id;
+    const response = await this.commerce('/products/search', { method: 'POST', body: JSON.stringify({
+      query: { and: [{ fullText: { field: 'name', language: 'en-CA', value: query } }, { filter: [{ exact: { field: 'stores', value: storeId } }] }] },
+      limit, offset,
+    }) });
+    if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to search Store products');
+    const raw = z.object({ total: z.number(), results: z.array(z.object({ id: z.string() })) }).parse(await response.json());
+    const products = await Promise.all(raw.results.map(async ({ id }) => {
+      const projection = await this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-projections/${encodeURIComponent(id)}?priceCurrency=CAD&priceCountry=CA&priceChannel=${encodeURIComponent(channelId)}`);
+      if (!projection.ok) return undefined;
+      const item = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string().optional(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }).optional(), attributes: z.array(z.object({ name: z.string(), value: z.unknown() })) }) }).parse(await projection.json());
+      const attributes = Object.fromEntries(item.masterVariant.attributes.map(attribute => [attribute.name, attribute.value]));
+      return { id: item.id, key: item.key, name: item.name['en-CA'] ?? item.name['en-US'] ?? Object.values(item.name)[0], sku: item.masterVariant.sku, brand: attributes['pace-brand'], price: item.masterVariant.price?.value };
+    }));
+    return { storeKey, query, limit, offset, total: raw.total, products: products.filter(Boolean) };
+  }
+
   async createStoreCart(storeKey: string, customer?: SessionCustomer) {
     const storeResponse = await this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`);
     if (!storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to prepare Store cart');

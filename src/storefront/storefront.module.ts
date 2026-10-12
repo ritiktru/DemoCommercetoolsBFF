@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { AuthService, OriginGuard } from '../auth.js';
 import { CommerceError } from '../commercetools.js';
-import { addItemInput, checkoutAddressInput,billingAddressInput, storeKeySchema, type StorefrontService } from './storefront.js';
+import { addItemInput, checkoutAddressInput,billingAddressInput, productSearchInput, storeKeySchema, type StorefrontService } from './storefront.js';
 const SERVICE = Symbol('STOREFRONT_SERVICE');
 
 @Controller('api/storefront')
@@ -44,6 +44,12 @@ export class StorefrontController {
   @Get('stores/:storeKey/products') products(@Param('storeKey') raw: string) {
     const key = storeKeySchema.safeParse(raw); if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
     return this.storefront.listStoreProducts(key.data);
+  }
+  @Get('stores/:storeKey/products/search') searchProducts(@Param('storeKey') raw: string, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const input = productSearchInput.safeParse(req.query);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a search query');
+    return this.storefront.searchStoreProducts(key.data, input.data.q, input.data.limit, input.data.offset);
   }
   @Post('stores/:storeKey/carts') @UseGuards(OriginGuard)
   createCart(@Param('storeKey') raw: string, @Req() req: Request) {

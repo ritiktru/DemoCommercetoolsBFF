@@ -21,6 +21,7 @@ export default function Home() {
   const [stores, setStores] = useState<Store[]>([]);
   const [storeKey, setStoreKey] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
+  const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Cart>();
   const [customer, setCustomer] = useState<{ email: string }>();
   const [status, setStatus] = useState('Loading stores…');
@@ -44,6 +45,11 @@ export default function Home() {
     setCart(undefined); setShowCheckout(false); setShippingMethods([]); setShippingMethodId(''); setCheckoutAddressSaved(false); setDeliveryPassCart(false); setStatus('Loading assortment…');
     api(`/api/storefront/stores/${storeKey}/products`).then(data => { setProducts(data.products); setStatus(`${data.products.length} products available`); }).catch(error => setStatus(error.message));
   }, [storeKey]);
+  useEffect(() => {
+    if (!storeKey || !search.trim()) return;
+    const timer = setTimeout(() => { api(`/api/storefront/stores/${storeKey}/products/search?q=${encodeURIComponent(search.trim())}&limit=24`).then(data => { setProducts(data.products); setStatus(`${data.total} matching products`); }).catch(error => setStatus(error.message)); }, 300);
+    return () => clearTimeout(timer);
+  }, [storeKey, search]);
 
   async function signIn() {
     try {
@@ -123,7 +129,7 @@ export default function Home() {
   return <main>
     <header><div><span className="eyebrow">COMMERCE POC</span><h1>Fresh picks by store</h1><p>Select a Sobeys location to test Store-scoped assortments, Channel prices, and carts.</p></div><div className="account">{customer ? <><span>Signed in</span><strong>{customer.email}</strong></> : <><button onClick={signIn}>Sign in with Google</button><div id="google-signin" /></>}</div></header>
     <section className="toolbar"><label>Shopping at<select value={storeKey} onChange={event => setStoreKey(event.target.value)}>{stores.map(store => <option key={store.key} value={store.key}>{store.name} ({store.key.replace('sobeys-', '')})</option>)}</select></label>{deliveryPass && <button disabled={busy} onClick={buyDeliveryPass}>Buy Delivery Pass · {money(deliveryPass.price)}</button>}<div className="status" role="status">{status}</div></section>
-    <div className="layout"><section><div className="sectionTitle"><h2>Available products</h2><span>{products.length} items</span></div><div className="grid">{products.map(product => <article key={product.id}><div className="image">{String(product.brand ?? 'Sobeys').slice(0, 1)}</div><span className="brand">{String(product.brand ?? 'Grocery')}</span><h3>{product.name}</h3><p className="sku">SKU {product.sku}</p><div className="productFooter"><strong>{money(product.price)}</strong><button disabled={!product.price || busy} onClick={() => add(product)}>Add</button></div></article>)}</div></section>
+    <div className="layout"><section><input aria-label="Search products" placeholder="Search products…" value={search} onChange={event => setSearch(event.target.value)} /><div className="sectionTitle"><h2>Available products</h2><span>{products.length} items</span></div><div className="grid">{products.map(product => <article key={product.id}><div className="image">{String(product.brand ?? 'Sobeys').slice(0, 1)}</div><span className="brand">{String(product.brand ?? 'Grocery')}</span><h3>{product.name}</h3><p className="sku">SKU {product.sku}</p><div className="productFooter"><strong>{money(product.price)}</strong><button disabled={!product.price || busy} onClick={() => add(product)}>Add</button></div></article>)}</div></section>
       <aside><div className="cartHead"><h2>Your cart</h2><span>{cart?.lineItems.reduce((sum, item) => sum + item.quantity, 0) ?? 0}</span></div>{!cart?.lineItems.length ? <div className="empty"><div>🛒</div><p>Your selected products will appear here.</p></div> : <>{cart.lineItems.map(item => <div className="cartItem" key={item.id}><div><strong>{item.name['en-CA'] ?? Object.values(item.name)[0]}</strong><small>{item.variant.sku} · Qty {item.quantity}</small></div><span>{money(item.totalPrice)}</span></div>)}<div className="total"><span>Total</span><strong>{money(cart.totalPrice)}</strong></div><button className="checkoutButton" disabled={busy} onClick={() => setShowCheckout(true)}>Checkout</button></>}</aside></div>
     {showCheckout && cart && <section className="checkoutPanel"><h2>Checkout</h2><p>Enter your delivery address. Billing uses the same address for this demo.</p>
       <form onSubmit={saveAddress} className="checkoutForm">

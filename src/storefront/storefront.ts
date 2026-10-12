@@ -3,6 +3,7 @@ import type { SessionCustomer } from '../sessions.js';
 
 export const storeKeySchema = z.string().trim().min(1).max(256).regex(/^sobeys-[0-9]+$/);
 export const addItemInput = z.strictObject({ cartId: z.uuid(), version: z.number().int().positive(), sku: z.string().min(1).max(256), quantity: z.number().int().min(1).max(99) });
+export const productSearchInput = z.object({ q: z.string().trim().min(1).max(100), limit: z.coerce.number().int().min(1).max(50).default(24), offset: z.coerce.number().int().min(0).max(10000).default(0) });
 export type AddItemInput = z.infer<typeof addItemInput>;
 export const checkoutAddressInput = z.strictObject({
   cartId: z.uuid(),
@@ -33,6 +34,7 @@ export type BillingAddressInput = z.infer<typeof billingAddressInput>;
 export interface StorefrontService {
   listStores(): Promise<unknown>;
   listStoreProducts(storeKey: string): Promise<unknown>;
+  searchStoreProducts(storeKey: string, query: string, limit?: number, offset?: number): Promise<unknown>;
   createStoreCart(storeKey: string, customer?: SessionCustomer): Promise<unknown>;
   addStoreCartItem(storeKey: string, input: AddItemInput, customer?: SessionCustomer): Promise<unknown>;
   setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer): Promise<unknown>;
