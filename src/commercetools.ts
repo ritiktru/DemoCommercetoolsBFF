@@ -100,6 +100,16 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     });
   }
 
+  async getOntarioTaxRate(): Promise<number> {
+    const response = await this.commerce('/tax-categories?limit=100');
+    if (!response.ok) return 0.13;
+    const data = await response.json();
+    const rate = data.results
+      ?.flatMap((c: any) => c.rates ?? [])
+      .find((r: any) => r.country === 'CA' && r.state === 'Ontario' && r.key === 'ontario-hst');
+    return rate?.amount ?? 0.13;
+  }
+
   async listStores() {
     const response = await this.commerce('/stores?limit=500');
     if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Stores');
@@ -249,18 +259,24 @@ async listCheckoutShippingMethods(storeKey: string, cartId: string, customer?: S
             centAmount: z.number(),
             fractionDigits: z.number().optional(),
           }),
+          freeAbove: z.object({
+            currencyCode: z.string(),
+            centAmount: z.number(),
+            fractionDigits: z.number().optional(),
+          }).optional(),
         })),
       })).optional(),
     })),
   }).parse(await response.json());
-  return {
-    shippingMethods: result.results.map(method => ({
-      id: method.id,
-      name: method.name,
-      isDefault: method.isDefault,
-      price: method.zoneRates?.[0]?.shippingRates?.[0]?.price,
-    })),
-  };
+return {
+  shippingMethods: result.results.map(method => ({
+    id: method.id,
+    name: method.name,
+    isDefault: method.isDefault,
+    price: method.zoneRates?.[0]?.shippingRates?.[0]?.price,
+    freeAbove: method.zoneRates?.[0]?.shippingRates?.[0]?.freeAbove,
+  })),
+};
 }
 
   async setCheckoutShippingMethod(storeKey: string, cartId: string, shippingMethodId: string, customer?: SessionCustomer) {

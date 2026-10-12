@@ -74,6 +74,12 @@ export class StorefrontController {
     return this.storefront.setCheckoutAddress(key.data, input.data, this.optionalCustomer(req));
   }
 
+  @Get('tax-rate')
+  async taxRate() {
+    const rate = await this.storefront.getOntarioTaxRate();
+    return { rate, name: 'Ontario HST', percent: Math.round(rate * 100) };
+  }
+
   @Get('stores/:storeKey/carts/:cartId/shipping-methods')
   shippingMethods(@Param('storeKey') raw: string, @Param('cartId') cartId: string, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw);

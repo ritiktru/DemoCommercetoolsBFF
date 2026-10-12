@@ -51,6 +51,7 @@ export interface StorefrontService {
   applyStoreCartDiscount(storeKey: string, input: ApplyDiscountInput, customer?: SessionCustomer): Promise<unknown>;
   removeStoreCartDiscount(storeKey: string, input: RemoveDiscountInput, customer?: SessionCustomer): Promise<unknown>;
   setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer): Promise<unknown>;
+  getOntarioTaxRate(): Promise<number>;
   listCheckoutShippingMethods(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
   setCheckoutShippingMethod(storeKey: string, cartId: string, shippingMethodId: string, customer?: SessionCustomer): Promise<unknown>;
   createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;

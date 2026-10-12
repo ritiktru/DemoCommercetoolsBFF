@@ -21,7 +21,7 @@ type Cart = {
     discountedPrice?: { value?: Money };
   };
 };
-type ShippingMethod = { id: string; name: string; isDefault?: boolean; price?: Money };
+type ShippingMethod = { id: string; name: string; isDefault?: boolean; price?: Money; freeAbove?: Money };
 type Address = {
   firstName: string;
   lastName: string;
@@ -74,6 +74,8 @@ export default function Home() {
   const [status, setStatus] = useState('Loading stores…');
   const [showCheckout, setShowCheckout] = useState(false);
   const [email, setEmail] = useState('');
+  const [taxRate, setTaxRate] = useState<number | null>(null);
+  const [orderPlaced, setOrderPlaced] = useState(false);
   const [address, setAddress] = useState<Address>({
     firstName: '',
     lastName: '',
@@ -103,6 +105,10 @@ export default function Home() {
         setEmail(data.customer.email);
       })
       .catch(() => undefined);
+
+    api('/api/storefront/tax-rate')
+      .then(data => setTaxRate(data.rate ?? 0.13))
+      .catch(() => setTaxRate(0.13));
   }, []);
 
   useEffect(() => {
@@ -397,7 +403,11 @@ export default function Home() {
         logWarn: true,
         logError: true,
       });
-      setStatus('Checkout payment is ready.');
+      setTimeout(() => {
+        setOrderPlaced(true);
+        setShowCheckout(false);
+        setStatus('Order placed successfully!');
+      }, 3000);
     } catch (error) {
       setStatus((error as Error).message);
     } finally {
@@ -408,20 +418,34 @@ export default function Home() {
   const selectedShipping = shippingMethods.find(method => method.id === shippingMethodId);
   const itemsTotal = cart
     ? {
-      currencyCode: cart.totalPrice.currencyCode,
-      centAmount: cart.lineItems.reduce((sum, item) => sum + item.totalPrice.centAmount, 0),
-    }
+        currencyCode: cart.totalPrice.currencyCode,
+        centAmount: cart.lineItems.reduce((sum, item) => sum + item.totalPrice.centAmount, 0),
+      }
     : undefined;
+
   const listedShipping = cart?.shippingInfo?.price ?? selectedShipping?.price;
-  const shippingCharge = {
-    currencyCode: cart?.totalPrice.currencyCode ?? 'CAD',
-    centAmount: freeShippingApplied ? 0 : (listedShipping?.centAmount ?? 0),
-  };
+  const freeAboveCents = selectedShipping?.freeAbove?.centAmount ?? 0;
+  const autoFreeShipping = freeAboveCents > 0 && (itemsTotal?.centAmount ?? 0) >= freeAboveCents;
+
+  const shippingNet = freeShippingApplied || autoFreeShipping ? 0 : (listedShipping?.centAmount ?? 0);
+
+  const showShippingAndTax = showCheckout && shippingMethods.length > 0;
+
+  const itemsTax = showShippingAndTax && taxRate !== null
+    ? Math.round((itemsTotal?.centAmount ?? 0) * taxRate)
+    : 0;
+
+  const shippingTax = showShippingAndTax && taxRate !== null
+    ? Math.round(shippingNet * taxRate)
+    : 0;
+
+  const shippingGross = shippingNet + shippingTax;
+
   const displayTotal = itemsTotal
     ? {
-      currencyCode: itemsTotal.currencyCode,
-      centAmount: itemsTotal.centAmount + shippingCharge.centAmount,
-    }
+        currencyCode: itemsTotal.currencyCode,
+        centAmount: itemsTotal.centAmount + shippingGross + itemsTax,
+      }
     : undefined;
 
   return (
@@ -517,17 +541,23 @@ export default function Home() {
                 <span>Items</span>
                 <strong>{money(itemsTotal)}</strong>
               </div>
-              <div className="total">
-                <span>
-                  Shipping
-                  {selectedShipping
-                    ? ` (${selectedShipping.name})`
-                    : cart.shippingInfo?.shippingMethodName
-                      ? ` (${cart.shippingInfo.shippingMethodName})`
-                      : ''}
-                </span>
-                <strong>{shippingCharge ? money(shippingCharge) : 'Select delivery'}</strong>
-              </div>
+
+              {showShippingAndTax && (
+                <>
+                  <div className="total">
+                    <span>
+                      Shipping{selectedShipping ? ` (${selectedShipping.name})` : ''}
+                      {shippingNet > 0 ? ' (incl. tax)' : ''}
+                    </span>
+                    <strong>{money({ currencyCode: 'CAD', centAmount: shippingGross })}</strong>
+                  </div>
+                  <div className="total">
+                    <span>Tax (Ontario HST {Math.round((taxRate ?? 0) * 100)}%)</span>
+                    <strong>{money({ currencyCode: 'CAD', centAmount: itemsTax })}</strong>
+                  </div>
+                </>
+              )}
+
               <div className="total">
                 <span>Total</span>
                 <strong>{money(displayTotal)}</strong>
@@ -559,42 +589,48 @@ export default function Home() {
                   </button>
                 </div>
               </form>
-              {(listedShipping?.centAmount ?? 0) <= 0 && !freeShippingApplied ? (
-                <p className="status">No shipping charge</p>
-              ) : freeShippingApplied ? (
-                <div className="cartItem">
-                  <div>
-                    <strong>{DEMO_FREE_SHIP_CODE}</strong>
-                    <small>Shipping $0.00</small>
-                  </div>
-                  <button type="button" disabled={busy} onClick={removeFreeShipping}>
-                    Remove
-                  </button>
-                </div>
-              ) : (
-                <form
-                  className="checkoutForm"
-                  onSubmit={event => {
-                    event.preventDefault();
-                    void applyFreeShipping();
-                  }}
-                >
-                  <label>
-                    Free shipping code
-                    <input
-                      value={freeShippingCode}
-                      onChange={event => setFreeShippingCode(event.target.value)}
-                      placeholder={DEMO_FREE_SHIP_CODE}
-                      autoComplete="off"
-                    />
-                  </label>
-                  <div className="checkoutActions">
-                    <button disabled={busy || !freeShippingCode.trim()} type="submit">
-                      Apply code
-                    </button>
-                  </div>
-                </form>
+
+              {showShippingAndTax && (
+                <>
+                  {(listedShipping?.centAmount ?? 0) <= 0 && !freeShippingApplied ? (
+                    <p className="status">No shipping charge</p>
+                  ) : freeShippingApplied ? (
+                    <div className="cartItem">
+                      <div>
+                        <strong>{DEMO_FREE_SHIP_CODE}</strong>
+                        <small>Shipping $0.00</small>
+                      </div>
+                      <button type="button" disabled={busy} onClick={removeFreeShipping}>
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <form
+                      className="checkoutForm"
+                      onSubmit={event => {
+                        event.preventDefault();
+                        void applyFreeShipping();
+                      }}
+                    >
+                      <label>
+                        Free shipping code
+                        <input
+                          value={freeShippingCode}
+                          onChange={event => setFreeShippingCode(event.target.value)}
+                          placeholder={DEMO_FREE_SHIP_CODE}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <div className="checkoutActions">
+                        <button disabled={busy || !freeShippingCode.trim()} type="submit">
+                          Apply code
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </>
               )}
+
               <button className="checkoutButton" disabled={busy} onClick={() => setShowCheckout(true)}>
                 Checkout
               </button>
@@ -669,6 +705,58 @@ export default function Home() {
               </button>
             </div>
           )}
+        </section>
+      )}
+
+      {orderPlaced && cart && (
+        <section className="thankYouPanel" style={{ marginTop: '2rem', padding: '1.5rem', border: '1px solid #e0e0e0', borderRadius: '8px', background: '#fafafa' }}>
+          <center><div>
+            <h2 style={{ color: '#2e7d32', margin: '0 0 0.5rem' }}>Thank You!</h2>
+            <p>Your order has been placed successfully.</p>
+          </div></center>
+
+          <div style={{ margin: '1.5rem 0' }}>
+            <h3>Order Summary</h3>
+            {cart.lineItems.map(item => (
+              <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
+                <div>
+                  <strong>{item.name['en-CA'] ?? Object.values(item.name)[0]}</strong>
+                  <small> · Qty {item.quantity}</small>
+                </div>
+                <span>{money(item.totalPrice)}</span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
+              <span>Items</span>
+              <strong>{money(itemsTotal)}</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
+              <span>Shipping {selectedShipping ? `(${selectedShipping.name})` : ''}</span>
+              <strong>{money({ currencyCode: 'CAD', centAmount: shippingGross })}</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
+              <span>Tax</span>
+              <strong>{money({ currencyCode: 'CAD', centAmount: itemsTax })}</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', fontWeight: 'bold', fontSize: '1.1rem' }}>
+              <span>Total Paid</span>
+              <strong>{money(displayTotal)}</strong>
+            </div>
+          </div>
+
+          <center><button
+            onClick={() => {
+              setOrderPlaced(false);
+              setCart(undefined);
+              setShowCheckout(false);
+              setShippingMethods([]);
+              setShippingMethodId('');
+            }}
+            style={{ marginTop: '1rem' }}
+          >
+            Continue Shopping
+          </button>
+          </center>
         </section>
       )}
     </main>

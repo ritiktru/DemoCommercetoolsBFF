@@ -49,4 +49,5 @@ export type CartResult = { cart: z.infer<typeof cartSchema> };
 export interface CartService {
   createCart(input: CartInput, customer: SessionCustomer): Promise<CartResult>;
   getCart(id: string, customer: SessionCustomer): Promise<CartResult>;
+  getOntarioTaxRate(): Promise<number>;
 }
