@@ -76,6 +76,12 @@ export default function Home() {
   const [email, setEmail] = useState('');
   const [taxRate, setTaxRate] = useState<number | null>(null);
   const [orderPlaced, setOrderPlaced] = useState(false);
+  const [orderDetails, setOrderDetails] = useState<{
+    itemsTax: number;
+    shippingGross: number;
+    displayTotal?: Money;
+    shippingName?: string;
+  }>();
   const [address, setAddress] = useState<Address>({
     firstName: '',
     lastName: '',
@@ -374,6 +380,15 @@ export default function Home() {
   async function pay() {
     if (!cart || !shippingMethodId) return;
     setBusy(true);
+
+    // Store current calculated values BEFORE payment
+    setOrderDetails({
+      itemsTax,
+      shippingGross,
+      displayTotal,
+      shippingName: selectedShipping?.name,
+    });
+
     try {
       const selected = await api(`/api/storefront/stores/${storeKey}/checkout-shipping`, {
         method: 'POST',
@@ -428,8 +443,8 @@ export default function Home() {
   const autoFreeShipping = freeAboveCents > 0 && (itemsTotal?.centAmount ?? 0) >= freeAboveCents;
 
   const shippingNet = freeShippingApplied || autoFreeShipping ? 0 : (listedShipping?.centAmount ?? 0);
-
-  const showShippingAndTax = showCheckout && shippingMethods.length > 0;
+const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.length > 0;
+  
 
   const itemsTax = showShippingAndTax && taxRate !== null
     ? Math.round((itemsTotal?.centAmount ?? 0) * taxRate)
@@ -708,15 +723,16 @@ export default function Home() {
         </section>
       )}
 
-      {orderPlaced && cart && (
+      {orderPlaced && cart && orderDetails && (
         <section className="thankYouPanel" style={{ marginTop: '2rem', padding: '1.5rem', border: '1px solid #e0e0e0', borderRadius: '8px', background: '#fafafa' }}>
-          <center><div>
+         <center> <div>
             <h2 style={{ color: '#2e7d32', margin: '0 0 0.5rem' }}>Thank You!</h2>
             <p>Your order has been placed successfully.</p>
           </div></center>
 
           <div style={{ margin: '1.5rem 0' }}>
             <h3>Order Summary</h3>
+
             {cart.lineItems.map(item => (
               <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
                 <div>
@@ -726,27 +742,36 @@ export default function Home() {
                 <span>{money(item.totalPrice)}</span>
               </div>
             ))}
+
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
               <span>Items</span>
               <strong>{money(itemsTotal)}</strong>
             </div>
+
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-              <span>Shipping {selectedShipping ? `(${selectedShipping.name})` : ''}</span>
-              <strong>{money({ currencyCode: 'CAD', centAmount: shippingGross })}</strong>
+              <span>Shipping {orderDetails.shippingName ? `(${orderDetails.shippingName})` : ''} (incl. tax)</span>
+              <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.shippingGross })}</strong>
             </div>
+
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-              <span>Tax</span>
-              <strong>{money({ currencyCode: 'CAD', centAmount: itemsTax })}</strong>
+              <span>Tax (Ontario HST {Math.round((taxRate ?? 0) * 100)}%)</span>
+              <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.itemsTax })}</strong>
             </div>
+
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', fontWeight: 'bold', fontSize: '1.1rem' }}>
               <span>Total Paid</span>
-              <strong>{money(displayTotal)}</strong>
+              <strong>{money(orderDetails.displayTotal)}</strong>
             </div>
           </div>
 
-          <center><button
+          {(email || customer?.email) && (
+            <p>A confirmation email will be sent to <strong>{email || customer?.email}</strong></p>
+          )}
+
+         <center> <button
             onClick={() => {
               setOrderPlaced(false);
+              setOrderDetails(undefined);
               setCart(undefined);
               setShowCheckout(false);
               setShippingMethods([]);
