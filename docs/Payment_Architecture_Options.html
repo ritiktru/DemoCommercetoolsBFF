@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Payment Architecture Options – BFF, OrderIQ, and commercetools Checkout</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #20342f; line-height: 1.48; margin: 48px; }
+    h1 { color: #0b7657; font-size: 29px; margin-bottom: 4px; }
+    h2 { color: #17483a; border-bottom: 2px solid #d9e8e2; padding-bottom: 5px; margin-top: 30px; }
+    h3 { color: #17664f; margin-top: 22px; }
+    h4 { color: #315d50; margin-bottom: 5px; }
+    .subtitle { color: #5d7069; margin-top: 0; }
+    .summary { background: #edf8f3; border-left: 5px solid #0b8c66; padding: 14px 18px; margin: 22px 0; }
+    .warning { background: #fff7dc; border-left: 5px solid #d4a017; padding: 12px 16px; margin: 18px 0; }
+    .decision { background: #eaf2ff; border-left: 5px solid #3573c5; padding: 14px 18px; margin: 22px 0; }
+    .flow { background: #f5f7f6; border: 1px solid #d5ded9; padding: 15px; font-family: Menlo, monospace; white-space: pre-wrap; font-size: 12px; }
+    code { background: #f0f3f2; padding: 2px 5px; font-family: Menlo, monospace; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0 22px; }
+    th { background: #0b7657; color: white; text-align: left; }
+    th, td { border: 1px solid #c8d6d0; padding: 8px; vertical-align: top; }
+    tr:nth-child(even) td { background: #f7faf9; }
+    li { margin: 5px 0; }
+    .footer { margin-top: 40px; border-top: 1px solid #d5ded9; padding-top: 10px; color: #73817c; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>Payment Architecture Options</h1>
+  <p class="subtitle">Detailed comparison of payment orchestration in the BFF, OrderIQ, or commercetools Checkout with Adyen</p>
+
+  <div class="summary"><strong>Context:</strong> The storefront uses Next.js/React Native, a NestJS BFF, commercetools for commerce, Adyen as the production payment service provider, and OrderIQ as the order management system.</div>
+
+  <h2>1. Scope and assumptions</h2>
+  <p>This document compares three approaches for payment ownership:</p>
+  <ol>
+    <li>Payment service implemented inside the BFF.</li>
+    <li>Payment service implemented inside OrderIQ.</li>
+    <li>commercetools Checkout with an Adyen connector.</li>
+  </ol>
+  <p>All approaches must support authorization, capture, cancellation, refund, idempotency, webhook verification, retries, reconciliation, and secure handling of payment references. Raw card data must not pass through the BFF, OrderIQ, or commercetools application code.</p>
+
+  <h2>2. Shared business lifecycle</h2>
+  <table>
+    <tr><th>Phase</th><th>Expected outcome</th></tr>
+    <tr><td>Cart preparation</td><td>commercetools calculates product prices, tax, discounts, shipping, and final cart total.</td></tr>
+    <tr><td>Payment initiation</td><td>A trusted backend creates a payment attempt for the exact cart amount and currency.</td></tr>
+    <tr><td>Customer authentication</td><td>Adyen handles card entry, wallet interaction, and any required 3DS challenge.</td></tr>
+    <tr><td>Authorization</td><td>Adyen approves or rejects the payment and produces a PSP reference.</td></tr>
+    <tr><td>Order creation</td><td>A commercetools Order is created once the configured payment condition is satisfied.</td></tr>
+    <tr><td>OMS handoff</td><td>The confirmed grocery Order is sent to OrderIQ for fulfilment.</td></tr>
+    <tr><td>Capture</td><td>Funds are captured immediately or after picking, depending on substitutions and business policy.</td></tr>
+    <tr><td>After-sales</td><td>Cancellations and refunds update Adyen, commercetools Payment, OrderIQ, and customer-facing order status.</td></tr>
+  </table>
+
+  <h2>3. Approach 1: Payment service inside the BFF</h2>
+  <h3>3.1 Ownership</h3>
+  <table>
+    <tr><th>Component</th><th>Responsibility</th></tr>
+    <tr><td>Storefront</td><td>Requests checkout, renders Adyen Web/Drop-in, and shows status.</td></tr>
+    <tr><td>BFF payment module</td><td>Creates Adyen sessions/payments, validates cart totals, processes webhooks, updates commercetools Payment, and creates or triggers Order creation.</td></tr>
+    <tr><td>commercetools</td><td>Owns Cart, calculated total, Payment representation, and Order.</td></tr>
+    <tr><td>OrderIQ</td><td>Receives confirmed Orders and manages fulfilment.</td></tr>
+    <tr><td>Adyen</td><td>Collects payment details, performs authentication, authorization, capture, and refund.</td></tr>
+  </table>
+
+  <h3>3.2 Checkout and authorization flow</h3>
+  <div class="flow">Customer clicks Pay
+        ↓
+Storefront calls BFF: POST /checkout/payment-session
+        ↓
+BFF verifies session, cart ownership, cart state, currency, and current total
+        ↓
+BFF creates a commercetools Payment in Pending state
+        ↓
+BFF calls Adyen to create a payment session using the server-calculated amount
+        ↓
+BFF returns only client-safe Adyen session data
+        ↓
+Storefront renders Adyen component; card data goes directly to Adyen
+        ↓
+Customer completes card/wallet and 3DS authentication
+        ↓
+Adyen returns an immediate result and separately sends a signed webhook
+        ↓
+BFF verifies HMAC, event type, PSP reference, amount, currency, and idempotency key
+        ↓
+BFF records the transaction on the commercetools Payment
+        ↓
+BFF creates the commercetools Order or marks it ready for creation
+        ↓
+Order event is sent to OrderIQ</div>
+
+  <h3>3.3 Capture after fulfilment</h3>
+  <div class="flow">OrderIQ completes picking and substitutions
+        ↓
+OrderIQ calculates the final fulfilment amount
+        ↓
+OrderIQ sends a signed capture request/event to the BFF
+        ↓
+BFF verifies Order, Payment, requested amount, and prior capture state
+        ↓
+BFF calls Adyen capture API with an idempotency key
+        ↓
+Adyen sends capture webhook
+        ↓
+BFF updates commercetools Payment transaction and Order payment state
+        ↓
+Storefront reads the updated status through the BFF</div>
+
+  <h3>3.4 Cancellation and refund</h3>
+  <ul>
+    <li>Before capture: BFF submits an Adyen authorization cancellation.</li>
+    <li>After capture: BFF submits full or partial refund.</li>
+    <li>Adyen webhook is authoritative for the final result.</li>
+    <li>BFF updates the commercetools Payment and exposes the result to OrderIQ and the storefront.</li>
+  </ul>
+
+  <h3>3.5 Benefits and concerns</h3>
+  <table>
+    <tr><th>Benefits</th><th>Concerns</th></tr>
+    <tr><td>Direct storefront integration; full control of payment behavior; easier custom business logic.</td><td>The BFF becomes responsible for webhook security, retries, idempotency, reconciliation, capture/refund workflows, monitoring, and payment data governance.</td></tr>
+    <tr><td>Can coordinate tightly with commercetools Cart and Customer sessions.</td><td>Payment load and failure modes affect all other BFF APIs unless isolated operationally.</td></tr>
+  </table>
+
+  <h2>4. Approach 2: Payment service inside OrderIQ</h2>
+  <h3>4.1 Ownership</h3>
+  <table>
+    <tr><th>Component</th><th>Responsibility</th></tr>
+    <tr><td>Storefront/BFF</td><td>Prepares checkout and requests a payment session from OrderIQ.</td></tr>
+    <tr><td>OrderIQ payment module</td><td>Owns Adyen integration, authorization, webhook processing, capture, cancellation, refund, and payment reconciliation.</td></tr>
+    <tr><td>commercetools</td><td>Owns Cart and Order; Payment records must be synchronized from OrderIQ.</td></tr>
+    <tr><td>Adyen</td><td>Executes payment operations and sends events to OrderIQ.</td></tr>
+  </table>
+
+  <h3>4.2 Checkout and authorization flow</h3>
+  <div class="flow">Customer clicks Pay
+        ↓
+Storefront calls BFF
+        ↓
+BFF verifies customer session and reads the latest commercetools Cart
+        ↓
+BFF sends cart reference, trusted total, currency, and customer reference to OrderIQ
+        ↓
+OrderIQ creates its payment/checkout record
+        ↓
+OrderIQ calls Adyen and returns client-safe session data through the BFF
+        ↓
+Storefront renders Adyen component
+        ↓
+Adyen authorizes payment and sends signed webhook to OrderIQ
+        ↓
+OrderIQ verifies and persists the payment result
+        ↓
+OrderIQ calls an integration service/BFF to create or update commercetools Payment
+        ↓
+commercetools Order is created
+        ↓
+OrderIQ links the commercetools Order to its OMS order</div>
+
+  <h3>4.3 Capture, cancellation, and refund</h3>
+  <p>OrderIQ can align capture directly with picking and substitutions because it knows the final fulfilment amount. It calls Adyen and then synchronizes every transaction result back to commercetools. The same pattern applies to authorization cancellation and refunds.</p>
+
+  <h3>4.4 Benefits and concerns</h3>
+  <table>
+    <tr><th>Benefits</th><th>Concerns</th></tr>
+    <tr><td>Capture, substitutions, cancellation, and refunds are close to fulfilment decisions.</td><td>Checkout availability becomes dependent on the OMS; OrderIQ must offer a proven customer-facing Adyen integration.</td></tr>
+    <tr><td>One operational system coordinates final fulfilment and payment amounts.</td><td>Payment state can diverge between OrderIQ and commercetools without strong synchronization and reconciliation.</td></tr>
+    <tr><td>Potential reuse if OrderIQ already supports Adyen at enterprise scale.</td><td>Order creation sequencing is more complex because the OMS participates before the commercetools Order exists.</td></tr>
+  </table>
+
+  <div class="warning"><strong>Prerequisite:</strong> Choose this approach only if OrderIQ already supports secure Adyen session creation, HMAC-verified webhooks, idempotent payment operations, partial capture/refund, and reliable synchronization with commercetools.</div>
+
+  <h2>5. Approach 3: commercetools Checkout with Adyen connector</h2>
+  <h3>5.1 Ownership</h3>
+  <table>
+    <tr><th>Component</th><th>Responsibility</th></tr>
+    <tr><td>Storefront</td><td>Collects address/shipping information and launches the commercetools Checkout Browser SDK.</td></tr>
+    <tr><td>BFF</td><td>Verifies session/cart ownership, prepares the cart, and creates the Checkout Session.</td></tr>
+    <tr><td>commercetools Checkout</td><td>Coordinates the payment UI, connector, Payment, and Order creation.</td></tr>
+    <tr><td>Adyen connector</td><td>Translates Checkout payment operations to Adyen and processes payment outcomes.</td></tr>
+    <tr><td>OrderIQ</td><td>Receives confirmed Orders and manages fulfilment.</td></tr>
+  </table>
+
+  <h3>5.2 Checkout and authorization flow</h3>
+  <div class="flow">Customer clicks Pay
+        ↓
+Storefront calls BFF to prepare checkout
+        ↓
+BFF verifies session, cart ownership, cart state, addresses, shipping, and total
+        ↓
+BFF creates a commercetools Checkout Session
+        ↓
+Storefront launches Checkout Browser SDK paymentFlow
+        ↓
+Checkout loads the Adyen payment component through the connector
+        ↓
+Customer enters payment details and completes 3DS if required
+        ↓
+Adyen result is processed by the connector
+        ↓
+Checkout records commercetools Payment transactions
+        ↓
+Checkout creates the commercetools Order
+        ↓
+Browser receives checkout_completed with Order ID
+        ↓
+Backend Order event sends the Order to OrderIQ</div>
+
+  <h3>5.3 Capture and post-order operations</h3>
+  <p>The selected connector and business configuration determine whether authorization is captured immediately or later. For grocery fulfilment with substitutions, the integration must confirm support for delayed and partial capture. OrderIQ can publish capture/refund instructions to a backend integration that invokes the supported connector or Adyen operation and synchronizes the resulting commercetools Payment transaction.</p>
+
+  <h3>5.4 Benefits and concerns</h3>
+  <table>
+    <tr><th>Benefits</th><th>Concerns</th></tr>
+    <tr><td>Keeps the BFF thin; standard Checkout UI and Payment/Order linkage; connector handles most payment integration work.</td><td>Connector capabilities must be confirmed for delayed capture, substitutions, partial capture, refund, and the required Adyen methods.</td></tr>
+    <tr><td>Fewer custom payment endpoints and webhook handlers in the BFF.</td><td>Operational troubleshooting spans Checkout, connector, Adyen, commercetools, and OrderIQ.</td></tr>
+    <tr><td>Matches the current POC architecture.</td><td>Backend events are still required; the browser callback alone is not sufficient for production integrations.</td></tr>
+  </table>
+
+  <h2>6. Side-by-side comparison</h2>
+  <table>
+    <tr><th>Criterion</th><th>BFF payment service</th><th>OrderIQ payment service</th><th>Checkout + Adyen connector</th></tr>
+    <tr><td>BFF complexity</td><td>High</td><td>Medium</td><td>Low</td></tr>
+    <tr><td>OMS dependency during checkout</td><td>No</td><td>Yes</td><td>No</td></tr>
+    <tr><td>Custom payment code</td><td>High</td><td>Depends on OrderIQ capability</td><td>Low to medium</td></tr>
+    <tr><td>Payment/Order linkage</td><td>Custom implementation</td><td>Synchronization required</td><td>Provided by Checkout flow</td></tr>
+    <tr><td>Fit for fulfilment-based capture</td><td>Good with custom work</td><td>Potentially strongest</td><td>Must confirm connector capability</td></tr>
+    <tr><td>Webhook ownership</td><td>BFF/payment module</td><td>OrderIQ</td><td>Connector/integration</td></tr>
+    <tr><td>Recommended when</td><td>Unique requirements justify a dedicated payment platform</td><td>OrderIQ already has a mature Adyen implementation</td><td>Standard connector satisfies payment and fulfilment requirements</td></tr>
+  </table>
+
+  <h2>7. Recommended direction</h2>
+  <div class="decision"><strong>Recommended starting point:</strong> Use commercetools Checkout with the Adyen connector. Keep the BFF responsible for authentication, cart ownership, cart readiness, and Checkout Session creation. Send confirmed commercetools Orders to OrderIQ using backend events.</div>
+  <p>Before final approval, validate the connector against Sobeys grocery requirements:</p>
+  <ol>
+    <li>Preauthorization and delayed capture.</li>
+    <li>Partial capture after substitutions or unavailable items.</li>
+    <li>Authorization amount adjustment or incremental authorization.</li>
+    <li>Partial and full refunds.</li>
+    <li>Cancellation before capture.</li>
+    <li>Interac, cards, wallets, and required Canadian payment methods.</li>
+    <li>Webhook retry, idempotency, and reconciliation behavior.</li>
+    <li>How OrderIQ requests capture/refund and receives the final result.</li>
+  </ol>
+  <p>If the connector cannot meet these requirements and OrderIQ already has a proven Adyen integration, Approach 2 becomes a strong alternative. If neither provides the needed capabilities, create a dedicated payment service rather than embedding all payment responsibilities into the general-purpose BFF.</p>
+
+  <h2>8. OrderIQ integration rules</h2>
+  <ul>
+    <li>Send grocery Orders to OrderIQ only after the configured payment condition is satisfied.</li>
+    <li>Use commercetools Subscriptions or Checkout/backend events, not browser calls, for OMS handoff.</li>
+    <li>Use stable IDs to correlate Cart, Payment, Order, Adyen PSP reference, and OrderIQ order.</li>
+    <li>Make every event consumer and payment command idempotent.</li>
+    <li>Define one authoritative owner for each state and document state mappings.</li>
+    <li>Exclude non-fulfilment products such as Delivery Pass from OrderIQ, or send them with an explicit digital/non-fulfilment order type.</li>
+  </ul>
+
+  <h2>9. Decision questions for the OrderIQ and Adyen teams</h2>
+  <ol>
+    <li>Does OrderIQ already provide a supported Adyen integration?</li>
+    <li>Can OrderIQ create browser-safe Adyen sessions without receiving card data?</li>
+    <li>Who receives and verifies Adyen HMAC webhooks?</li>
+    <li>Can the solution perform delayed and partial capture after substitutions?</li>
+    <li>Where is the Adyen PSP reference stored and reconciled?</li>
+    <li>Who creates and updates the commercetools Payment?</li>
+    <li>Which system is authoritative for authorization, capture, refund, and overall payment state?</li>
+    <li>How are duplicate events and out-of-order webhooks handled?</li>
+    <li>What happens when payment succeeds but Order creation or OMS handoff fails?</li>
+    <li>What are the retry, monitoring, alerting, and manual recovery processes?</li>
+  </ol>
+
+  <div class="footer">Sobeys commercetools architecture · Payment ownership options · Generated 7 October 2026</div>
+</body>
+</html>

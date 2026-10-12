@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
-import { PERCENT_DISCOUNT_CODE,PERCENT_DISCOUNT,FLAT_DISCOUNT_CODE,FLAT_DISCOUNT_CENTS, FREE_SHIPPING_CODE, storeKeySchema, type AddItemInput,type UpdateItemInput, type CheckoutAddressInput,type RemoveDiscountInput, type ApplyDiscountInput, type StorefrontService } from './storefront/storefront.js';
+import { storeKeySchema, type AddItemInput, type CheckoutAddressInput, type BillingAddressInput, type StorefrontService } from './storefront/storefront.js';
 
 export const customerInput = z.strictObject({
   email: z.email().max(254),
@@ -32,6 +32,12 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   private token?: { value: string; expiresAt: number };
   private pendingToken?: Promise<string>;
   constructor(private readonly config: Config, private readonly fetcher: typeof fetch = fetch) {}
+
+  private storeProvince(storeKey: string, store: unknown): string | undefined {
+    const configured = z.object({ address: z.object({ state: z.string().optional() }).optional() }).safeParse(store);
+    if (configured.success && configured.data.address?.state) return configured.data.address.state;
+    return ({ 'sobeys-0320': 'NL', 'sobeys-0657': 'ON' } as Record<string, string>)[storeKey];
+  }
 
   private async accessToken(): Promise<string> {
     if (this.token && this.token.expiresAt > Date.now()) return this.token.value;
@@ -100,26 +106,10 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     });
   }
 
-  async getOntarioTaxRate(): Promise<number> {
-    const response = await this.commerce('/tax-categories?limit=100');
-    if (!response.ok) return 0.13;
-    const data = await response.json();
-    const rate = data.results
-      ?.flatMap((c: any) => c.rates ?? [])
-      .find((r: any) => r.country === 'CA' && r.state === 'Ontario' && r.key === 'ontario-hst');
-    return rate?.amount ?? 0.13;
-  }
-
   async listStores() {
     const response = await this.commerce('/stores?limit=500');
     if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Stores');
-    const result = z.object({
-      results: z.array(z.object({
-        key: z.string(),
-        name: z.record(z.string(), z.string()).optional(),
-        productSelections: z.array(z.object({ active: z.boolean() })).default([]),
-      })),
-    }).parse(await response.json());
+    const result = z.object({ results: z.array(z.object({ key: z.string(), name: z.record(z.string(), z.string()).optional(), productSelections: z.array(z.object({ active: z.boolean() })).default([]) })) }).parse(await response.json());
     const stores = result.results
       .filter(store => storeKeySchema.safeParse(store.key).success && store.productSelections.some(selection => selection.active))
       .map(store => ({ key: store.key, name: store.name?.['en-CA'] ?? store.name?.['en-US'] ?? Object.values(store.name ?? {})[0] ?? store.key }))
@@ -129,7 +119,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
 
   async listStoreProducts(storeKey: string) {
     const [assignments, channelResponse] = await Promise.all([
-      this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-selection-assignments?limit=100`),
+      this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-selection-assignments?limit=10`),
       this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
     ]);
     if (!assignments.ok || !channelResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store assortment');
@@ -146,14 +136,40 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { storeKey, products };
   }
 
+  async searchStoreProducts(storeKey: string, query: string, limit = 24, offset = 0) {
+    const [channelResponse, storeResponse] = await Promise.all([
+      this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
+      this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`),
+    ]);
+    if (!channelResponse.ok || !storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store references');
+    const channelId = z.object({ id: z.string() }).parse(await channelResponse.json()).id;
+    const storeId = z.object({ id: z.string() }).parse(await storeResponse.json()).id;
+    const response = await this.commerce('/products/search', { method: 'POST', body: JSON.stringify({
+      query: { and: [{ fullText: { field: 'name', language: 'en-CA', value: query } }, { filter: [{ exact: { field: 'stores', value: storeId } }] }] },
+      limit, offset,
+    }) });
+    if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to search Store products');
+    const raw = z.object({ total: z.number(), results: z.array(z.object({ id: z.string() })) }).parse(await response.json());
+    const products = await Promise.all(raw.results.map(async ({ id }) => {
+      const projection = await this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-projections/${encodeURIComponent(id)}?priceCurrency=CAD&priceCountry=CA&priceChannel=${encodeURIComponent(channelId)}`);
+      if (!projection.ok) return undefined;
+      const item = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string().optional(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }).optional(), attributes: z.array(z.object({ name: z.string(), value: z.unknown() })) }) }).parse(await projection.json());
+      const attributes = Object.fromEntries(item.masterVariant.attributes.map(attribute => [attribute.name, attribute.value]));
+      return { id: item.id, key: item.key, name: item.name['en-CA'] ?? item.name['en-US'] ?? Object.values(item.name)[0], sku: item.masterVariant.sku, brand: attributes['pace-brand'], price: item.masterVariant.price?.value };
+    }));
+    return { storeKey, query, limit, offset, total: raw.total, products: products.filter(Boolean) };
+  }
+
   async createStoreCart(storeKey: string, customer?: SessionCustomer) {
     const storeResponse = await this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`);
     if (!storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to prepare Store cart');
+    const storeResource = await storeResponse.clone().json();
+    const province = this.storeProvince(storeKey, storeResource);
     if (customer) {
       const customerResponse = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`);
       if (!customerResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to prepare Store cart');
       const commerceCustomer = z.object({ version: z.number(), stores: z.array(z.object({ id: z.string().optional(), key: z.string().optional() })).default([]) }).parse(await customerResponse.json());
-      const store = z.object({ id: z.string() }).parse(await storeResponse.clone().json());
+      const store = z.object({ id: z.string() }).parse(storeResource);
       if (!commerceCustomer.stores.some(reference => reference.id === store.id || reference.key === storeKey)) {
         const linked = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`, { method: 'POST', body: JSON.stringify({ version: commerceCustomer.version, actions: [{ action: 'addStore', store: { typeId: 'store', id: store.id } }] }) });
         if (!linked.ok) {
@@ -172,42 +188,31 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
         }
       }
     }
+    const taxAddress = province ? { shippingAddress: { country: 'CA', state: province } } : {};
     const body = customer
-      ? { currency: 'CAD', country: 'CA', customerId: customer.id, customerEmail: customer.email, store: { typeId: 'store', key: storeKey } }
-      : { currency: 'CAD', country: 'CA', store: { typeId: 'store', key: storeKey } };
+      ? { currency: 'CAD', country: 'CA', customerId: customer.id, customerEmail: customer.email, store: { typeId: 'store', key: storeKey }, ...taxAddress }
+      : { currency: 'CAD', country: 'CA', store: { typeId: 'store', key: storeKey }, ...taxAddress };
     const response = await this.commerce('/carts', { method: 'POST', body: JSON.stringify(body) });
     await this.checkCartResponse(response); return { cart: cartSchema.parse(await response.json()) };
   }
 
   async addStoreCartItem(storeKey: string, input: AddItemInput, customer?: SessionCustomer) {
-    const existing = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`);
-    await this.checkCartResponse(existing); const cart = cartSchema.parse(await existing.json());
+    const [existing, storeResponse] = await Promise.all([
+      this.commerce(`/carts/${encodeURIComponent(input.cartId)}`),
+      this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`),
+    ]);
+    await this.checkCartResponse(existing); const raw = await existing.json(); const cart = cartSchema.parse(raw);
     if (customer ? cart.customerId !== customer.id : cart.customerId) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
     if (cart.version !== input.version) throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
-    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: input.version, actions: [{ action: 'addLineItem', sku: input.sku, quantity: input.quantity, distributionChannel: { typeId: 'channel', key: `${storeKey}-channel` }, supplyChannel: { typeId: 'channel', key: `${storeKey}-channel` } }] }) });
+    const shippingAddress = z.object({ shippingAddress: z.object({ country: z.string().optional(), state: z.string().optional() }).optional() }).parse(raw).shippingAddress;
+    const store = storeResponse.ok ? await storeResponse.json() : undefined;
+    const province = this.storeProvince(storeKey, store);
+    const actions: object[] = [];
+    if ((!shippingAddress?.country || !shippingAddress.state) && province) actions.push({ action: 'setShippingAddress', address: { country: 'CA', state: province } });
+    actions.push({ action: 'addLineItem', sku: input.sku, quantity: input.quantity, distributionChannel: { typeId: 'channel', key: `${storeKey}-channel` }, supplyChannel: { typeId: 'channel', key: `${storeKey}-channel` } });
+    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: input.version, actions }) });
     await this.checkCartResponse(response); return { cart: cartSchema.parse(await response.json()) };
   }
-
-  async updateStoreCartItem(storeKey: string, input: UpdateItemInput, customer?: SessionCustomer) {
-  const { cart } = await this.getCheckoutCart(storeKey, input.cartId, customer);
-  if (cart.version !== input.version) {
-    throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
-  }
-  const line = cart.lineItems.find(item => item.id === input.lineItemId);
-  if (!line) throw new CommerceError(404, 'LineItemNotFound', 'Item not found in cart');
-
-  const action =
-    input.quantity === 0
-      ? { action: 'removeLineItem', lineItemId: input.lineItemId }
-      : { action: 'changeLineItemQuantity', lineItemId: input.lineItemId, quantity: input.quantity };
-
-  const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, {
-    method: 'POST',
-    body: JSON.stringify({ version: cart.version, actions: [action] }),
-  });
-  await this.checkCartResponse(response);
-  return { cart: cartSchema.parse(await response.json()) };
-}
 
   private async getCheckoutCart(storeKey: string, cartId: string, customer?: SessionCustomer) {
     const response = await this.commerce(`/carts/${encodeURIComponent(cartId)}`);
@@ -224,9 +229,10 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   async setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer) {
     const { cart } = await this.getCheckoutCart(storeKey, input.cartId, customer);
     if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add at least one product before checkout');
-    // commercetools tax rates match shippingAddress.state exactly; this POC's
-    // Canadian rate is configured as "Ontario", not the postal abbreviation "ON".
-    const state = /^on(tario)?$/i.test(input.address.state) ? 'Ontario' : input.address.state;
+    // Tax Rates use canonical Canadian province codes and state matching is exact.
+    const state = /^on(tario)?$/i.test(input.address.state) ? 'ON'
+      : /^(nl|newfoundland( and labrador)?)$/i.test(input.address.state) ? 'NL'
+      : input.address.state.toUpperCase();
     const address = { ...input.address, state, country: 'CA', email: input.email };
     const actions: object[] = [
       { action: 'setShippingAddress', address },
@@ -240,44 +246,28 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { cart: cartSchema.parse(await response.json()) };
   }
 
-async listCheckoutShippingMethods(storeKey: string, cartId: string, customer?: SessionCustomer) {
-  const { raw } = await this.getCheckoutCart(storeKey, cartId, customer);
-  if (!z.object({ shippingAddress: z.object({ country: z.literal('CA') }).optional() }).parse(raw).shippingAddress) {
-    throw new CommerceError(400, 'ShippingAddressMissing', 'Enter a shipping address first');
+  async listCheckoutShippingMethods(storeKey: string, cartId: string, customer?: SessionCustomer) {
+    const { raw } = await this.getCheckoutCart(storeKey, cartId, customer);
+    if (!z.object({ shippingAddress: z.object({ country: z.literal('CA') }).optional() }).parse(raw).shippingAddress) {
+      throw new CommerceError(400, 'ShippingAddressMissing', 'Enter a shipping address first');
+    }
+    const response = await this.commerce(`/shipping-methods/matching-cart?cartId=${encodeURIComponent(cartId)}`);
+    if (!response.ok) throw new CommerceError(502, 'ShippingMethodsFailed', 'Unable to load shipping methods');
+    const result = z.object({ results: z.array(z.object({ id: z.string(), name: z.string(), isDefault: z.boolean().optional() })) }).parse(await response.json());
+    const activePass = this.config.DELIVERY_PASS_SHIPPING_METHOD_ID && customer ? await this.hasActiveDeliveryPass(customer.id) : false;
+    const shippingMethods = this.config.DELIVERY_PASS_SHIPPING_METHOD_ID && !activePass
+      ? result.results.filter(method => method.id !== this.config.DELIVERY_PASS_SHIPPING_METHOD_ID)
+      : result.results;
+    return { shippingMethods };
   }
-  const response = await this.commerce(`/shipping-methods/matching-cart?cartId=${encodeURIComponent(cartId)}`);
-  if (!response.ok) throw new CommerceError(502, 'ShippingMethodsFailed', 'Unable to load shipping methods');
-  const result = z.object({
-    results: z.array(z.object({
-      id: z.string(),
-      name: z.string(),
-      isDefault: z.boolean().optional(),
-      zoneRates: z.array(z.object({
-        shippingRates: z.array(z.object({
-          price: z.object({
-            currencyCode: z.string(),
-            centAmount: z.number(),
-            fractionDigits: z.number().optional(),
-          }),
-          freeAbove: z.object({
-            currencyCode: z.string(),
-            centAmount: z.number(),
-            fractionDigits: z.number().optional(),
-          }).optional(),
-        })),
-      })).optional(),
-    })),
-  }).parse(await response.json());
-return {
-  shippingMethods: result.results.map(method => ({
-    id: method.id,
-    name: method.name,
-    isDefault: method.isDefault,
-    price: method.zoneRates?.[0]?.shippingRates?.[0]?.price,
-    freeAbove: method.zoneRates?.[0]?.shippingRates?.[0]?.freeAbove,
-  })),
-};
-}
+
+  private async hasActiveDeliveryPass(customerId: string) {
+    const response = await this.commerce(`/customers/${encodeURIComponent(customerId)}`);
+    if (!response.ok) return false;
+    const customer = z.object({ custom: z.object({ fields: z.record(z.string(), z.unknown()).default({}) }).optional() }).parse(await response.json());
+    const fields = customer.custom?.fields ?? {};
+    return fields.deliveryPassActive === true && typeof fields.deliveryPassExpiresAt === 'string' && Date.parse(fields.deliveryPassExpiresAt) > Date.now();
+  }
 
   async setCheckoutShippingMethod(storeKey: string, cartId: string, shippingMethodId: string, customer?: SessionCustomer) {
     const { cart } = await this.getCheckoutCart(storeKey, cartId, customer);
@@ -291,140 +281,6 @@ return {
     await this.checkCartResponse(response);
     return { cart: cartSchema.parse(await response.json()) };
   }
-
-async applyStoreCartDiscount(storeKey: string, input: ApplyDiscountInput, customer?: SessionCustomer) {
-  const { cart, raw } = await this.getCheckoutCart(storeKey, input.cartId, customer);
-  if (cart.version !== input.version) {
-    throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
-  }
-  if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add a product before applying a code');
-
-  const code = input.code.trim().toUpperCase();
-  const existing = this.readDirectDiscounts(raw);
-  let discounts;
-
-  if (code === FREE_SHIPPING_CODE) {
-    discounts = [...existing.filter(item => item.target?.type !== 'shipping'), this.freeShippingDiscount()];
-  } else {
-    const product = this.directDiscountFor(code, cart.totalPrice.currencyCode, cart.totalPrice.centAmount);
-    discounts = [
-      ...existing.filter(item => item.target?.type === 'shipping'),
-      product.action,
-    ];
-    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        version: cart.version,
-        actions: [{ action: 'setDirectDiscounts', discounts }],
-      }),
-    });
-    await this.checkCartResponse(response);
-    return {
-      cart: cartSchema.parse(await response.json()),
-      discountCode: product.code,
-      type: product.type,
-      percent: product.percent,
-      amount: product.amount,
-    };
-  }
-
-  const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      version: cart.version,
-      actions: [{ action: 'setDirectDiscounts', discounts }],
-    }),
-  });
-  await this.checkCartResponse(response);
-  return {
-    cart: cartSchema.parse(await response.json()),
-    discountCode: FREE_SHIPPING_CODE,
-    type: 'shipping' as const,
-  };
-}
-
-async removeStoreCartDiscount(storeKey: string, input: RemoveDiscountInput, customer?: SessionCustomer) {
-  const { cart, raw } = await this.getCheckoutCart(storeKey, input.cartId, customer);
-  if (cart.version !== input.version) {
-    throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
-  }
-  const existing = this.readDirectDiscounts(raw);
-  const discounts =
-    input.kind === 'shipping'
-      ? existing.filter(item => item.target?.type !== 'shipping')
-      : input.kind === 'product'
-        ? existing.filter(item => item.target?.type === 'shipping')
-        : [];
-
-  const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      version: cart.version,
-      actions: [{ action: 'setDirectDiscounts', discounts }],
-    }),
-  });
-  await this.checkCartResponse(response);
-  return { cart: cartSchema.parse(await response.json()) };
-}
-
-private readDirectDiscounts(raw: unknown) {
-  const parsed = z.object({
-    directDiscounts: z.array(z.object({
-      value: z.unknown(),
-      target: z.object({ type: z.string(), predicate: z.string().optional() }).passthrough(),
-    }).passthrough()).optional(),
-  }).safeParse(raw);
-  return parsed.success ? (parsed.data.directDiscounts ?? []) : [];
-}
-
-private freeShippingDiscount() {
-  return {
-    value: { type: 'relative' as const, permyriad: 10000 },
-    target: { type: 'shipping' as const },
-  };
-}
-
-private directDiscountFor(code: string, currencyCode: string, cartCents: number) {
-  if (code === PERCENT_DISCOUNT_CODE) {
-    return {
-      code: PERCENT_DISCOUNT_CODE,
-      type: 'percent' as const,
-      percent: PERCENT_DISCOUNT,
-      amount: undefined,
-      action: {
-        value: { type: 'relative' as const, permyriad: PERCENT_DISCOUNT * 100 },
-        target: { type: 'lineItems' as const, predicate: '1 = 1' },
-      },
-    };
-  }
-  if (code === FLAT_DISCOUNT_CODE) {
-    if (cartCents <= FLAT_DISCOUNT_CENTS) {
-      throw new CommerceError(
-        400,
-        'DiscountExceedsCart',
-        `Cart total must be more than $${(FLAT_DISCOUNT_CENTS / 100).toFixed(2)} to use ${FLAT_DISCOUNT_CODE}.`,
-      );
-    }
-    return {
-      code: FLAT_DISCOUNT_CODE,
-      type: 'flat' as const,
-      percent: undefined,
-      amount: { currencyCode, centAmount: FLAT_DISCOUNT_CENTS },
-      action: {
-        value: {
-          type: 'absolute' as const,
-          money: [{ currencyCode, centAmount: FLAT_DISCOUNT_CENTS }],
-        },
-        target: { type: 'lineItems' as const, predicate: '1 = 1' },
-      },
-    };
-  }
-  throw new CommerceError(
-    400,
-    'InvalidDiscountCode',
-    `Invalid code. Use ${PERCENT_DISCOUNT_CODE} (10% off) or ${FLAT_DISCOUNT_CODE} ($25 off).`,
-  );
-}
 
   async createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer) {
     if (!this.config.CT_CHECKOUT_SESSION_URL || !this.config.CT_CHECKOUT_APPLICATION_KEY) {
@@ -444,6 +300,74 @@ private directDiscountFor(code: string, currencyCode: string, cartCents: number)
     if (!sessionResponse.ok) throw new CommerceError(502, 'CheckoutSessionFailed', 'Unable to create Checkout Session');
     const result = z.object({ id: z.string().min(1) }).parse(await sessionResponse.json());
     return { sessionId: result.id };
+  }
+
+  async getDeliveryPass() {
+    const response = await this.commerce(`/product-projections/key=${encodeURIComponent(this.config.DELIVERY_PASS_PRODUCT_KEY)}?priceCurrency=CAD&priceCountry=CA`);
+    if (!response.ok) throw new CommerceError(404, 'DeliveryPassNotFound', 'Delivery Pass product not found');
+    const product = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }) }) }).parse(await response.json());
+    return { product: { id: product.id, key: product.key, name: product.name.en ?? product.name['en-CA'] ?? Object.values(product.name)[0], sku: product.masterVariant.sku, price: product.masterVariant.price.value } };
+  }
+
+  async createDeliveryPassCart(customer: SessionCustomer) {
+    const pass = await this.getDeliveryPass();
+    // Store-associated customers cannot own a cart without a Store. The BFF
+    // creates a guest cart tied to the signed-in customer's verified email.
+    const response = await this.commerce('/carts', { method: 'POST', body: JSON.stringify({ currency: 'CAD', country: 'CA', customerEmail: customer.email }) });
+    await this.checkCartResponse(response);
+    const created = cartSchema.parse(await response.json());
+    const updated = await this.commerce(`/carts/${encodeURIComponent(created.id)}`, { method: 'POST', body: JSON.stringify({ version: created.version, actions: [{ action: 'addLineItem', sku: pass.product.sku, quantity: 1 }] }) });
+    await this.checkCartResponse(updated);
+    return { cart: cartSchema.parse(await updated.json()) };
+  }
+
+  async setDeliveryPassAddress(input: CheckoutAddressInput, customer: SessionCustomer) {
+    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`);
+    await this.checkCartResponse(response);
+    const cartBody = await response.json();
+    const cart = cartSchema.parse(cartBody);
+    const owner = z.object({ customerEmail: z.string().optional() }).parse(cartBody);
+    if (cart.customerId || owner.customerEmail?.toLowerCase() !== customer.email.toLowerCase()) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
+    const state = /^on(tario)?$/i.test(input.address.state) ? 'Ontario' : input.address.state;
+    const address = { ...input.address, state, country: 'CA', email: input.email };
+    const updated = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: cart.version, actions: [{ action: 'setShippingAddress', address }, { action: 'setBillingAddress', address }] }) });
+    await this.checkCartResponse(updated);
+    return { cart: cartSchema.parse(await updated.json()) };
+  }
+
+  async createDeliveryPassCheckoutSession(cartId: string, customer: SessionCustomer) {
+    if (!this.config.CT_CHECKOUT_SESSION_URL || !this.config.CT_CHECKOUT_APPLICATION_KEY) throw new CommerceError(503, 'CheckoutNotConfigured', 'Set Checkout configuration');
+    const response = await this.commerce(`/carts/${encodeURIComponent(cartId)}`);
+    await this.checkCartResponse(response);
+    const cartBody = await response.json();
+    const cart = cartSchema.parse(cartBody);
+    const owner = z.object({ customerEmail: z.string().optional(), shippingAddress: z.unknown().optional(), billingAddress: z.unknown().optional() }).parse(cartBody);
+    if (cart.customerId || owner.customerEmail?.toLowerCase() !== customer.email.toLowerCase()) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
+    if (!owner.shippingAddress || !owner.billingAddress) throw new CommerceError(400, 'CheckoutNotReady', 'Save the delivery address before continuing to payment');
+    const session = await this.fetcher(`${this.config.CT_CHECKOUT_SESSION_URL.replace(/\/$/, '')}/${encodeURIComponent(this.config.CT_PROJECT_KEY)}/sessions`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000), headers: { Authorization: `Bearer ${await this.accessToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ cart: { cartRef: { id: cartId } }, metadata: { applicationKey: this.config.CT_CHECKOUT_APPLICATION_KEY } }) });
+    if (!session.ok) throw new CommerceError(502, 'CheckoutSessionFailed', 'Unable to create Checkout Session');
+    return { sessionId: z.object({ id: z.string() }).parse(await session.json()).id };
+  }
+
+  async activateDeliveryPass(orderId: string, customer: SessionCustomer) {
+    const orderResponse = await this.commerce(`/orders/${encodeURIComponent(orderId)}`);
+    if (!orderResponse.ok) throw new CommerceError(404, 'OrderNotFound', 'Order not found');
+    const order = z.object({ id: z.string(), customerId: z.string().optional(), customerEmail: z.string().optional(), lineItems: z.array(z.object({ variant: z.object({ sku: z.string().optional() }) })) }).parse(await orderResponse.json());
+    const belongsToCustomer = order.customerId === customer.id || (!order.customerId && order.customerEmail?.toLowerCase() === customer.email.toLowerCase());
+    if (!belongsToCustomer) throw new CommerceError(404, 'OrderNotFound', 'Order not found');
+    if (!order.lineItems.some(item => item.variant.sku === this.config.DELIVERY_PASS_SKU)) throw new CommerceError(400, 'DeliveryPassNotPurchased', 'This order does not contain a Delivery Pass');
+    const customerResponse = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`);
+    if (!customerResponse.ok) throw new CommerceError(404, 'CustomerNotFound', 'Customer not found');
+    const current = z.object({ version: z.number(), custom: z.object({ type: z.object({ key: z.string().optional() }).optional(), fields: z.record(z.string(), z.unknown()).default({}) }).optional() }).parse(await customerResponse.json());
+    const expiresAt = new Date();
+    expiresAt.setUTCMonth(expiresAt.getUTCMonth() + this.config.DELIVERY_PASS_DURATION_MONTHS);
+    const fields = { deliveryPassActive: true, deliveryPassExpiresAt: expiresAt.toISOString(), deliveryPassOrderId: order.id };
+    const actions = current.custom?.type?.key === this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY
+      ? Object.entries(fields).map(([name, value]) => ({ action: 'setCustomField', name, value }))
+      : [{ action: 'setCustomType', type: { typeId: 'type', key: this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY }, fields }];
+    const updated = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`, { method: 'POST', body: JSON.stringify({ version: current.version, actions }) });
+    if (!updated.ok) throw new CommerceError(502, 'DeliveryPassActivationFailed', 'Unable to activate Delivery Pass');
+    return { active: true, expiresAt: expiresAt.toISOString(), orderId: order.id };
   }
 
   async createCustomer(input: CustomerInput): Promise<CustomerResult> {
