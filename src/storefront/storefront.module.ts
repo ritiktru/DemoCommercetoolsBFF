@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { AuthService, OriginGuard } from '../auth.js';
 import { CommerceError } from '../commercetools.js';
-import { addItemInput, checkoutAddressInput,billingAddressInput, productSearchInput, storeKeySchema, type StorefrontService } from './storefront.js';
+import { addItemInput, applyDiscountInput, checkoutAddressInput, productSearchInput, removeDiscountInput, storeKeySchema, updateItemInput, type StorefrontService } from './storefront.js';
 const SERVICE = Symbol('STOREFRONT_SERVICE');
 
 @Controller('api/storefront')
@@ -62,6 +62,32 @@ export class StorefrontController {
     if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide cartId, version, sku, and quantity');
     return this.storefront.addStoreCartItem(key.data, input.data, this.optionalCustomer(req));
+  }
+  @Post('stores/:storeKey/cart-items/update') @UseGuards(OriginGuard)
+  updateItem(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const input = updateItemInput.safeParse(body);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide cartId, version, lineItemId, and quantity');
+    return this.storefront.updateStoreCartItem(key.data, input.data, this.optionalCustomer(req));
+  }
+  @Get('tax-rate')
+  async taxRate() {
+    const rate = await this.storefront.getOntarioTaxRate();
+    return { rate, name: 'Ontario HST', percent: Math.round(rate * 100) };
+  }
+  @Post('stores/:storeKey/discount') @UseGuards(OriginGuard)
+  applyDiscount(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const input = applyDiscountInput.safeParse(body);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide cartId, version, and code');
+    return this.storefront.applyStoreCartDiscount(key.data, input.data, this.optionalCustomer(req));
+  }
+  @Post('stores/:storeKey/discount/remove') @UseGuards(OriginGuard)
+  removeDiscount(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {
+    const key = storeKeySchema.safeParse(raw); const input = removeDiscountInput.safeParse(body);
+    if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide cartId, version, and discount kind');
+    return this.storefront.removeStoreCartDiscount(key.data, input.data, this.optionalCustomer(req));
   }
   @Post('stores/:storeKey/checkout-session') @UseGuards(OriginGuard)
   checkoutSession(@Param('storeKey') raw: string, @Body() body: unknown, @Req() req: Request) {

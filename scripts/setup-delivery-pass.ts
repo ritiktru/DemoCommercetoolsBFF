@@ -15,7 +15,8 @@ if (!auth.ok) throw new Error('Unable to authenticate with commercetools');
 const access = (await auth.json() as { access_token: string }).access_token;
 async function ct(path: string, init?: RequestInit) { return fetch(`${api}${path}`, { ...init, headers: { Authorization: `Bearer ${access}`, Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers } }); }
 async function error(response: Response) { try { const body = await response.json() as { message?: string; errors?: Array<{ code?: string; message?: string }> }; return body.errors?.map(item => `${item.code}: ${item.message}`).join('; ') || body.message || `HTTP ${response.status}`; } catch { return `HTTP ${response.status}`; } }
-async function byKey(path: string, key: string) { const response = await ct(`${path}/key=${encodeURIComponent(key)}`); if (response.status === 404) return undefined; if (!response.ok) throw new Error(`Unable to read ${path}: ${await error(response)}`); return await response.json() as { id: string; version: number; key: string }; }
+type KeyedResource = { id: string; version: number; key: string; fieldDefinitions?: Array<{ name: string }> };
+async function byKey(path: string, key: string) { const response = await ct(`${path}/key=${encodeURIComponent(key)}`); if (response.status === 404) return undefined; if (!response.ok) throw new Error(`Unable to read ${path}: ${await error(response)}`); return await response.json() as KeyedResource; }
 
 let customType = await byKey('/types', customTypeKey);
 if (!customType) {
@@ -23,8 +24,14 @@ if (!customType) {
     { name: 'deliveryPassActive', label: { en: 'Delivery Pass active' }, required: false, type: { name: 'Boolean' }, inputHint: 'SingleLine' },
     { name: 'deliveryPassExpiresAt', label: { en: 'Delivery Pass expiry' }, required: false, type: { name: 'DateTime' }, inputHint: 'SingleLine' },
     { name: 'deliveryPassOrderId', label: { en: 'Delivery Pass order' }, required: false, type: { name: 'String' }, inputHint: 'SingleLine' },
+    { name: 'rewardPointsBalance', label: { en: 'Reward points balance' }, required: false, type: { name: 'Number' }, inputHint: 'SingleLine' },
   ] }) });
   if (!response.ok) throw new Error(`Unable to create Customer Custom Type: ${await error(response)}`);
+  customType = await response.json() as typeof customType;
+}
+if (!customType!.fieldDefinitions?.some(field => field.name === 'rewardPointsBalance')) {
+  const response = await ct(`/types/${customType!.id}`, { method: 'POST', body: JSON.stringify({ version: customType!.version, actions: [{ action: 'addFieldDefinition', fieldDefinition: { name: 'rewardPointsBalance', label: { en: 'Reward points balance' }, required: false, type: { name: 'Number' }, inputHint: 'SingleLine' } }] }) });
+  if (!response.ok) throw new Error(`Unable to add rewardPointsBalance to Customer Custom Type: ${await error(response)}`);
   customType = await response.json() as typeof customType;
 }
 if (!await byKey('/product-types', productTypeKey)) throw new Error(`Product Type ${productTypeKey} was not found`);

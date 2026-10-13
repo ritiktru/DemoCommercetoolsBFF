@@ -15,11 +15,22 @@ type Cart = {
     quantity: number;
     totalPrice: Money;
     variant: { sku?: string };
+    price?: { value: Money; discounted?: { value: Money; discount?: { id: string; typeId?: string } } };
+    discountedPricePerQuantity?: Array<{
+      quantity: number;
+      discountedPrice: {
+        value: Money;
+        includedDiscounts: Array<{ discount: { id: string; typeId?: string }; discountedAmount: Money }>;
+      };
+    }>;
   }>;
   shippingInfo?: {
     shippingMethodName?: string;
     price?: Money;
-    discountedPrice?: { value?: Money };
+    discountedPrice?: {
+      value?: Money;
+      includedDiscounts?: Array<{ discount: { id: string; typeId?: string }; discountedAmount: Money }>;
+    };
   };
 };
 type ShippingMethod = { id: string; name: string; isDefault?: boolean; price?: Money; freeAbove?: Money };
@@ -73,6 +84,8 @@ export default function Home() {
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Cart>();
   const [customer, setCustomer] = useState<{ email: string }>();
+  const [rewardBalance, setRewardBalance] = useState(0);
+  const [rewardPreview, setRewardPreview] = useState(0);
   const [status, setStatus] = useState('Loading stores…');
   const [showCheckout, setShowCheckout] = useState(false);
   const [email, setEmail] = useState('');
@@ -114,7 +127,9 @@ export default function Home() {
       .then(data => {
         setCustomer(data.customer);
         setEmail(data.customer.email);
+        return api('/api/rewards/reconcile', { method: 'POST', body: '{}' });
       })
+      .then(data => setRewardBalance(data.balance ?? 0))
       .catch(() => undefined);
 
     api('/api/storefront/tax-rate')
@@ -124,6 +139,13 @@ export default function Home() {
       .then(data => setDeliveryPass(data))
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!customer || !cart?.id) { setRewardPreview(0); return; }
+    api('/api/rewards/preview', { method: 'POST', body: JSON.stringify({ cartId: cart.id }) })
+      .then(data => setRewardPreview(data.points ?? 0))
+      .catch(() => setRewardPreview(0));
+  }, [customer, cart?.id, cart?.version]);
 
   useEffect(() => {
     if (!storeKey) return;
@@ -183,6 +205,8 @@ export default function Home() {
             });
             setCustomer(data.customer);
             setEmail(data.customer.email);
+            const rewards = await api('/api/rewards/reconcile', { method: 'POST', body: '{}' });
+            setRewardBalance(rewards.balance ?? 0);
             setStatus('Signed in. You can add products.');
             target.replaceChildren();
           } catch (error) {
@@ -238,7 +262,17 @@ export default function Home() {
         });
       }
       if (!window.ctc) throw new Error('Checkout SDK is unavailable');
-      window.ctc('paymentFlow', { projectKey: 'sobeys-dev', region: 'us-central1.gcp', sessionId: session.sessionId, locale: 'en-CA' });
+      window.ctc('paymentFlow', {
+        projectKey: 'sobeys-dev', region: 'us-central1.gcp', sessionId: session.sessionId, locale: 'en-CA',
+        onInfo: async (message: { code?: string; payload?: { order?: { id?: string } } }) => {
+          const orderId = message.payload?.order?.id;
+          if (message.code !== 'checkout_completed' || !orderId) return;
+          try {
+            await api('/api/storefront/delivery-pass/activate', { method: 'POST', body: JSON.stringify({ orderId }) });
+            setStatus('Delivery Pass purchased and activated.');
+          } catch (error) { setStatus((error as Error).message); }
+        },
+      });
       setStatus('Delivery Pass payment started.');
       setShowPassCheckout(false);
     } catch (error) {
@@ -491,12 +525,22 @@ export default function Home() {
         logInfo: true,
         logWarn: true,
         logError: true,
+        onInfo: async (message: { code?: string; payload?: { order?: { id?: string } } }) => {
+          const orderId = message.payload?.order?.id;
+          if (message.code !== 'checkout_completed' || !orderId) return;
+          setOrderPlaced(true);
+          setShowCheckout(false);
+          if (!customer) { setStatus('Order placed successfully! Sign in to earn reward points.'); return; }
+          try {
+            const reward = await api(`/api/rewards/orders/${orderId}/award`, { method: 'POST', body: '{}' });
+            setRewardBalance(reward.balance);
+            setStatus(reward.points > 0
+              ? `Order placed! You earned ${reward.points} points. Balance: ${reward.balance}.`
+              : `Order placed successfully. Reward balance: ${reward.balance}.`);
+          } catch (error) { setStatus(`Order placed, but rewards could not be updated: ${(error as Error).message}`); }
+        },
       });
-      setTimeout(() => {
-        setOrderPlaced(true);
-        setShowCheckout(false);
-        setStatus('Order placed successfully!');
-      }, 3000);
+      setStatus('Complete payment to place the order.');
     } catch (error) {
       setStatus((error as Error).message);
     } finally {
@@ -511,6 +555,54 @@ export default function Home() {
         centAmount: cart.lineItems.reduce((sum, item) => sum + item.totalPrice.centAmount, 0),
       }
     : undefined;
+  const originalItemsTotal = cart
+    ? {
+        currencyCode: cart.totalPrice.currencyCode,
+        centAmount: cart.lineItems.reduce(
+          (sum, item) => sum + (item.price?.value.centAmount ?? Math.round(item.totalPrice.centAmount / item.quantity)) * item.quantity,
+          0,
+        ),
+      }
+    : undefined;
+  const itemDiscountCents = Math.max(0, (originalItemsTotal?.centAmount ?? 0) - (itemsTotal?.centAmount ?? 0));
+  const discountRows = (() => {
+    const rows: Array<{ key: string; label: string; centAmount: number }> = [];
+    const cartDiscounts = new Map<string, number>();
+    for (const item of cart?.lineItems ?? []) {
+      const productDiscount = item.price?.discounted;
+      if (productDiscount) {
+        const centAmount = Math.max(0, item.price!.value.centAmount - productDiscount.value.centAmount) * item.quantity;
+        if (centAmount > 0) rows.push({
+          key: `product-${item.id}-${productDiscount.discount?.id ?? 'discount'}`,
+          label: `Product discount — ${item.name['en-CA'] ?? Object.values(item.name)[0]}`,
+          centAmount,
+        });
+      }
+      for (const portion of item.discountedPricePerQuantity ?? []) {
+        for (const included of portion.discountedPrice.includedDiscounts) {
+          const amount = included.discountedAmount.centAmount * portion.quantity;
+          cartDiscounts.set(included.discount.id, (cartDiscounts.get(included.discount.id) ?? 0) + amount);
+        }
+      }
+    }
+    let cartPromotionNumber = 0;
+    for (const [id, centAmount] of cartDiscounts) {
+      cartPromotionNumber += 1;
+      rows.push({ key: `cart-${id}`, label: `Cart promotion ${cartPromotionNumber}`, centAmount });
+    }
+    let shippingPromotionNumber = 0;
+    for (const included of cart?.shippingInfo?.discountedPrice?.includedDiscounts ?? []) {
+      shippingPromotionNumber += 1;
+      rows.push({ key: `shipping-${included.discount.id}`, label: `Shipping promotion ${shippingPromotionNumber}`, centAmount: included.discountedAmount.centAmount });
+    }
+    const describedItemDiscount = rows
+      .filter(row => !row.key.startsWith('shipping-'))
+      .reduce((sum, row) => sum + row.centAmount, 0);
+    if (itemDiscountCents > describedItemDiscount) {
+      rows.push({ key: 'other-item-discounts', label: 'Other item discounts', centAmount: itemDiscountCents - describedItemDiscount });
+    }
+    return rows.filter(row => row.centAmount > 0);
+  })();
 
   const listedShipping = cart?.shippingInfo?.price ?? selectedShipping?.price;
   const freeAboveCents = selectedShipping?.freeAbove?.centAmount ?? 0;
@@ -550,6 +642,7 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
             <>
               <span>Signed in</span>
               <strong>{customer.email}</strong>
+              <span>{rewardBalance} reward points</span>
             </>
           ) : (
             <>
@@ -638,8 +731,14 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
               ))}
               <div className="total">
                 <span>Items</span>
-                <strong>{money(itemsTotal)}</strong>
+                <strong>{money(originalItemsTotal)}</strong>
               </div>
+              {discountRows.map(discount => (
+                <div className="total" style={{ color: '#087b5b' }} key={discount.key}>
+                  <span>{discount.label}</span>
+                  <strong>−{money({ currencyCode: originalItemsTotal?.currencyCode ?? 'CAD', centAmount: discount.centAmount })}</strong>
+                </div>
+              ))}
 
               {showShippingAndTax && (
                 <>
@@ -661,6 +760,12 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
                 <span>Total</span>
                 <strong>{money(displayTotal)}</strong>
               </div>
+              {customer && (
+                <div className="total">
+                  <span>Reward points after purchase</span>
+                  <strong>{rewardPreview > 0 ? `+${rewardPreview} points` : 'No points'}</strong>
+                </div>
+              )}
               {appliedDiscount && (
                 <div className="cartItem">
                   <div>
@@ -844,8 +949,14 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
               <span>Items</span>
-              <strong>{money(itemsTotal)}</strong>
+              <strong>{money(originalItemsTotal)}</strong>
             </div>
+            {discountRows.map(discount => (
+              <div key={discount.key} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee', color: '#087b5b' }}>
+                <span>{discount.label}</span>
+                <strong>−{money({ currencyCode: originalItemsTotal?.currencyCode ?? 'CAD', centAmount: discount.centAmount })}</strong>
+              </div>
+            ))}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
               <span>Shipping {orderDetails.shippingName ? `(${orderDetails.shippingName})` : ''} (incl. tax)</span>

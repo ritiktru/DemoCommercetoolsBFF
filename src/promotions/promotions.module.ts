@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Header, Inject, Module, Param, Post, type DynamicModule } from '@nestjs/common';
 import { z } from 'zod';
 import { CommerceError } from '../commercetools.js';
-import { createPromotionInput, type PromotionService } from './promotions.js';
+import { createBundlePromotionInput, createPromotionInput, type PromotionService } from './promotions.js';
 import { promotionsPage, promotionsScript } from './promotions-page.js';
 
 const SERVICE = Symbol('PROMOTION_SERVICE');
@@ -32,6 +32,22 @@ export class PromotionsController {
   remove(@Param('id') id: string) {
     if (!z.uuid().safeParse(id).success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid product discount ID');
     return this.promotions.removePromotion(id);
+  }
+
+  @Get('api/bundle-promotions')
+  listBundles() { return this.promotions.listBundlePromotions(); }
+
+  @Post('api/bundle-promotions')
+  createBundle(@Body() body: unknown) {
+    const input = createBundlePromotionInput.safeParse(body);
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide at least two valid SKUs, a quantity of 2 or more, a name, and a positive price or percentage');
+    return this.promotions.createBundlePromotion(input.data);
+  }
+
+  @Delete('api/bundle-promotions/:id')
+  removeBundle(@Param('id') id: string) {
+    if (!z.uuid().safeParse(id).success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cart discount ID');
+    return this.promotions.removeBundlePromotion(id);
   }
 }
 

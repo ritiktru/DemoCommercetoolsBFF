@@ -69,3 +69,31 @@ test('Payment Only session requires address and shipping, then uses the prepared
   assert.equal(sessions, 1);
   await assert.rejects(client.createCheckoutSession('sobeys-0520', cartId, customer), (error: unknown) => error instanceof CommerceError && error.code === 'CartNotFound');
 });
+
+test('storefront applies and removes the POC10 direct discount', async () => {
+  let cart: any = {
+    id: cartId, version: 3, customerId: customer.id, store: { typeId: 'store', key: storeKey },
+    cartState: 'Active', country: 'CA', totalPrice: { currencyCode: 'CAD', centAmount: 3999, fractionDigits: 2 },
+    lineItems: [{ id: 'item-1', productId: 'product-1', quantity: 1, name: { 'en-CA': 'Test' }, variant: { id: 1, sku: 'test-EA' }, totalPrice: { currencyCode: 'CAD', centAmount: 3999, fractionDigits: 2 } }],
+    directDiscounts: [], createdAt: '2026-09-25T00:00:00Z', lastModifiedAt: '2026-09-25T00:00:00Z',
+  };
+  const updates: any[] = [];
+  const client = new CommercetoolsClient(config, async (url, init) => {
+    const path = String(url);
+    if (path.endsWith('/oauth/token')) return Response.json({ access_token: 'fake-token', expires_in: 3600 });
+    if (path.endsWith('/carts/' + cartId) && init?.method === 'POST') {
+      const update = JSON.parse(String(init.body)); updates.push(update);
+      cart = { ...cart, version: cart.version + 1, directDiscounts: update.actions[0].discounts };
+      return Response.json(cart);
+    }
+    if (path.endsWith('/carts/' + cartId)) return Response.json(cart);
+    throw new Error('Unexpected request: ' + path);
+  });
+
+  const applied: any = await client.applyStoreCartDiscount(storeKey, { cartId, version: 3, code: 'poc10' }, customer);
+  assert.equal(applied.type, 'percent');
+  assert.deepEqual(updates[0].actions, [{ action: 'setDirectDiscounts', discounts: [{ value: { type: 'relative', permyriad: 1000 }, target: { type: 'lineItems', predicate: '1 = 1' } }] }]);
+
+  await client.removeStoreCartDiscount(storeKey, { cartId, version: 4, kind: 'product' }, customer);
+  assert.deepEqual(updates[1].actions, [{ action: 'setDirectDiscounts', discounts: [] }]);
+});

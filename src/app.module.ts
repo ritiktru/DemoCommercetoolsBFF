@@ -11,14 +11,16 @@ import { StorefrontModule } from './storefront/storefront.module.js';
 import type { StorefrontService } from './storefront/storefront.js';
 import { PromotionsModule } from './promotions/promotions.module.js';
 import type { PromotionService } from './promotions/promotions.js';
+import { RewardsModule } from './rewards/rewards.module.js';
+import type { RewardService } from './rewards/rewards.js';
 
 @Module({})
 export class AppModule {
-  static register(customers: CustomerService, auth?: AuthOptions, carts?: CartService, storefront?: StorefrontService, promotions?: PromotionService): DynamicModule {
+  static register(customers: CustomerService, auth?: AuthOptions, carts?: CartService, storefront?: StorefrontService, promotions?: PromotionService, rewards?: RewardService): DynamicModule {
     const authentication = AuthModule.register(auth);
     return {
       module: AppModule,
-      imports: [CustomersModule.register(customers), authentication, ...(carts ? [CartsModule.register(carts, authentication)] : []), ...(storefront ? [StorefrontModule.register(storefront, authentication)] : []), ...(promotions ? [PromotionsModule.register(promotions)] : [])],
+      imports: [CustomersModule.register(customers), authentication, ...(carts ? [CartsModule.register(carts, authentication)] : []), ...(storefront ? [StorefrontModule.register(storefront, authentication)] : []), ...(promotions ? [PromotionsModule.register(promotions)] : []), ...(rewards ? [RewardsModule.register(rewards, authentication)] : [])],
       controllers: [AppController],
       providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],
     };

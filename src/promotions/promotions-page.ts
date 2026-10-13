@@ -1,66 +1,28 @@
-export const promotionsPage = String.raw`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Commerce Promotions</title>
-  <style>
-    :root{font-family:Inter,system-ui,sans-serif;color:#153d31;background:#f7f3eb}*{box-sizing:border-box}body{margin:0}.page{max-width:1100px;margin:auto;padding:48px 24px}h1{font-family:Georgia,serif;font-size:48px;margin:8px 0}.eyebrow{color:#078963;font-weight:800;letter-spacing:.15em}.panel{background:white;border:1px solid #ddd7cc;border-radius:18px;padding:24px;margin-top:28px;box-shadow:0 10px 30px #153d310d}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:16px}label{display:grid;gap:7px;font-weight:700}input,select{font:inherit;padding:13px;border:1px solid #bcb7ae;border-radius:10px}button{font:inherit;font-weight:800;color:white;background:#078963;border:0;border-radius:999px;padding:14px 24px;cursor:pointer}button:disabled{opacity:.55}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{text-align:left;padding:12px;border-bottom:1px solid #e8e3da}.status{min-height:24px;margin-top:14px;color:#526b63}.active{color:#078963;font-weight:800}.inactive{color:#9a3c31;font-weight:800}.remove{background:#a33a2f;padding:8px 14px;font-size:14px}@media(max-width:750px){.grid{grid-template-columns:1fr}h1{font-size:38px}table{font-size:14px}}
-  </style>
-</head>
-<body><main class="page">
-  <span class="eyebrow">COMMERCE POC</span><h1>Product promotions</h1>
-  <p>Create a commercetools Product Discount for one published SKU. Product prices in Merchant Center remain unchanged; the discount is applied by price calculation.</p>
-  <section class="panel"><form id="form">
-    <div class="grid">
-      <label>SKU<input id="sku" required maxlength="256" placeholder="680705-EA"></label>
-      <label>Discount type<select id="type"><option value="percentage">Percentage (%)</option><option value="fixed">Fixed amount (CAD)</option></select></label>
-      <label>Discount<input id="discount" required type="number" min="0.01" max="100" step="0.01" placeholder="10"></label>
-    </div>
-    <label style="margin:16px 0">Promotion name<input id="name" required maxlength="120" placeholder="10% off Huggies"></label>
-    <button id="submit">Create active promotion</button><div id="status" class="status" role="status"></div>
-  </form></section>
-  <section class="panel"><h2>Existing product discounts</h2><button id="refresh">Refresh</button>
-    <table><thead><tr><th>Name</th><th>Predicate</th><th>Discount</th><th>Status</th><th>Action</th></tr></thead><tbody id="rows"></tbody></table>
-  </section>
+export const promotionsPage = String.raw`<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Commerce Promotions</title>
+<style>:root{font-family:Inter,system-ui,sans-serif;color:#153d31;background:#f7f3eb}*{box-sizing:border-box}body{margin:0}.page{max-width:1150px;margin:auto;padding:48px 24px}h1{font-family:Georgia,serif;font-size:48px;margin:8px 0}.eyebrow{color:#078963;font-weight:800;letter-spacing:.15em}.panel{background:white;border:1px solid #ddd7cc;border-radius:18px;padding:24px;margin-top:28px;box-shadow:0 10px 30px #153d310d}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:16px}label{display:grid;gap:7px;font-weight:700}input,select,textarea{font:inherit;padding:13px;border:1px solid #bcb7ae;border-radius:10px}textarea{min-height:120px;resize:vertical}button{font:inherit;font-weight:800;color:white;background:#078963;border:0;border-radius:999px;padding:14px 24px;cursor:pointer}button:disabled{opacity:.55}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{text-align:left;padding:12px;border-bottom:1px solid #e8e3da;vertical-align:top}.status{min-height:24px;margin-top:14px;color:#526b63}.active{color:#078963;font-weight:800}.inactive{color:#9a3c31;font-weight:800}.remove{background:#a33a2f;padding:8px 14px;font-size:14px}.hint{color:#526b63;font-size:14px;font-weight:400}.check{display:flex;align-items:center;gap:10px;margin-top:30px}.check input{width:20px;height:20px}@media(max-width:800px){.grid{grid-template-columns:1fr}.check{margin-top:0}h1{font-size:38px}table{font-size:14px}}</style>
+</head><body><main class="page"><span class="eyebrow">COMMERCE POC</span><h1>Promotions</h1><p>Create automatic product and mix-and-match promotions in commercetools.</p>
+<section class="panel"><h2>Mix-and-match bundle promotion</h2><form id="bundle-form">
+<div class="grid"><label>Eligible SKUs<textarea id="bundle-skus" required placeholder="335327-EA&#10;1369594-EA&#10;102538-EA"></textarea><span class="hint">One SKU per line, or comma-separated.</span></label>
+<div><label>Offer<select id="bundle-type"><option value="fixedBundlePrice">Set bundle price (CAD)</option><option value="percentageOff">Percentage off selected items</option></select></label><label style="margin-top:16px">Required quantity<input id="bundle-quantity" required type="number" min="2" max="100" step="1" value="2"></label></div>
+<div><label id="bundle-value-label"><span>Bundle price (CAD)</span><input id="bundle-discount" required type="number" min="0.01" max="100000" step="0.01" placeholder="10"></label><label class="check"><input id="bundle-repeat" type="checkbox" checked> Repeat for additional groups</label></div></div>
+<label style="margin:16px 0">Promotion name<input id="bundle-name" required maxlength="120" placeholder="Any 2 selected products for $10"></label>
+<button id="bundle-submit">Create active bundle promotion</button><div id="bundle-status" class="status" role="status"></div></form></section>
+<section class="panel"><h2>Existing bundle promotions</h2><button id="bundle-refresh">Refresh</button><table><thead><tr><th>Name</th><th>Eligible products / quantity</th><th>Offer</th><th>Status</th><th>Action</th></tr></thead><tbody id="bundle-rows"></tbody></table></section>
+<section class="panel"><h2>Single-product promotion</h2><form id="form"><div class="grid"><label>SKU<input id="sku" required maxlength="256" placeholder="680705-EA"></label><label>Discount type<select id="type"><option value="percentage">Percentage (%)</option><option value="fixed">Fixed amount (CAD)</option></select></label><label>Discount<input id="discount" required type="number" min="0.01" max="100" step="0.01" placeholder="10"></label></div><label style="margin:16px 0">Promotion name<input id="name" required maxlength="120" placeholder="10% off Huggies"></label><button id="submit">Create active product promotion</button><div id="status" class="status" role="status"></div></form></section>
+<section class="panel"><h2>Existing product discounts</h2><button id="refresh">Refresh</button><table><thead><tr><th>Name</th><th>Predicate</th><th>Discount</th><th>Status</th><th>Action</th></tr></thead><tbody id="rows"></tbody></table></section>
 </main><script src="/promotions.js"></script></body></html>`;
 
 export const promotionsScript = String.raw`
-const status = document.getElementById('status');
-const rows = document.getElementById('rows');
-const discount = document.getElementById('discount');
-const type = document.getElementById('type');
-async function request(path, options) {
-  const response = await fetch(path, {...options, headers:{...(options?.body?{'Content-Type':'application/json'}:{}),...options?.headers}});
-  const body = await response.json().catch(()=>null);
-  if (!response.ok) throw new Error(body?.error?.message || 'Request failed');
-  return body;
-}
-function text(value){const node=document.createTextNode(String(value ?? ''));return node;}
-async function load(){
-  rows.replaceChildren();
-  try {
-    const data=await request('/api/promotions');
-    for(const item of data.promotions){
-      const tr=document.createElement('tr');
-      const label=item.discount.type==='percentage'?item.discount.value+'%':'CA$'+item.discount.value.toFixed(2);
-      for(const value of [item.name,item.predicate,label]){const td=document.createElement('td');td.append(text(value));tr.append(td)}
-      const state=document.createElement('td');state.className=item.active?'active':'inactive';state.append(text(item.active?'Active':'Inactive'));tr.append(state);
-      const action=document.createElement('td');const remove=document.createElement('button');remove.className='remove';remove.type='button';remove.textContent='Remove';remove.addEventListener('click',()=>removePromotion(item.id,item.name,remove));action.append(remove);tr.append(action);rows.append(tr);
-    }
-    if(!data.promotions.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=5;td.append(text('No product discounts found.'));tr.append(td);rows.append(tr)}
-  } catch(error){status.textContent=error.message}
-}
-type.addEventListener('change',()=>{discount.max=type.value==='percentage'?'100':'100000'});
-async function removePromotion(id,name,button){
-  if(!window.confirm('Remove product discount "'+name+'"?')) return;
-  button.disabled=true;status.textContent='Removing promotion…';
-  try{await request('/api/promotions/'+encodeURIComponent(id),{method:'DELETE'});status.textContent='Promotion removed successfully.';await load()}
-  catch(error){status.textContent=error.message;button.disabled=false}
-}
-document.getElementById('refresh').addEventListener('click',load);
-document.getElementById('form').addEventListener('submit',async event=>{
-  event.preventDefault();const button=document.getElementById('submit');button.disabled=true;status.textContent='Creating promotion…';
-  try{await request('/api/promotions',{method:'POST',body:JSON.stringify({sku:document.getElementById('sku').value,name:document.getElementById('name').value,discountType:type.value,discount:Number(discount.value)})});status.textContent='Promotion created successfully.';event.target.reset();await load()}
-  catch(error){status.textContent=error.message}finally{button.disabled=false}
-});
-load();`;
+async function request(path,options){const response=await fetch(path,{...options,headers:{...(options?.body?{'Content-Type':'application/json'}:{}),...options?.headers}});const body=await response.json().catch(()=>null);if(!response.ok)throw new Error(body?.error?.message||'Request failed');return body}
+function text(value){return document.createTextNode(String(value??''))}
+function emptyRow(body,message){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.append(text(message));tr.append(td);body.append(tr)}
+function buttonCell(item,path,load,status){const cell=document.createElement('td'),button=document.createElement('button');button.className='remove';button.type='button';button.textContent='Remove';button.addEventListener('click',async()=>{if(!window.confirm('Remove promotion "'+item.name+'"?'))return;button.disabled=true;status.textContent='Removing promotion…';try{await request(path+encodeURIComponent(item.id),{method:'DELETE'});status.textContent='Promotion removed successfully.';await load()}catch(error){status.textContent=error.message;button.disabled=false}});cell.append(button);return cell}
+const status=document.getElementById('status'),rows=document.getElementById('rows'),discount=document.getElementById('discount'),type=document.getElementById('type');
+async function loadProducts(){rows.replaceChildren();try{const data=await request('/api/promotions');for(const item of data.promotions){const tr=document.createElement('tr'),label=item.discount.type==='percentage'?item.discount.value+'%':'CA$'+item.discount.value.toFixed(2);for(const value of[item.name,item.predicate,label]){const td=document.createElement('td');td.append(text(value));tr.append(td)}const state=document.createElement('td');state.className=item.active?'active':'inactive';state.append(text(item.active?'Active':'Inactive'));tr.append(state);tr.append(buttonCell(item,'/api/promotions/',loadProducts,status));rows.append(tr)}if(!data.promotions.length)emptyRow(rows,'No product discounts found.')}catch(error){status.textContent=error.message}}
+type.addEventListener('change',()=>{discount.max=type.value==='percentage'?'100':'100000'});document.getElementById('refresh').addEventListener('click',loadProducts);document.getElementById('form').addEventListener('submit',async event=>{event.preventDefault();const button=document.getElementById('submit');button.disabled=true;status.textContent='Creating promotion…';try{await request('/api/promotions',{method:'POST',body:JSON.stringify({sku:document.getElementById('sku').value,name:document.getElementById('name').value,discountType:type.value,discount:Number(discount.value)})});status.textContent='Promotion created successfully.';event.target.reset();await loadProducts()}catch(error){status.textContent=error.message}finally{button.disabled=false}});
+const bundleStatus=document.getElementById('bundle-status'),bundleRows=document.getElementById('bundle-rows'),bundleType=document.getElementById('bundle-type'),bundleDiscount=document.getElementById('bundle-discount');
+function bundleSummary(target){const component=target.targetPattern?.[0];if(!component)return'Pattern promotion';const values=(component.predicate.match(/"([^"]+)"/g)||[]);return(component.minCount||'?')+' from '+values.length+' eligible SKUs'}
+async function loadBundles(){bundleRows.replaceChildren();try{const data=await request('/api/bundle-promotions');for(const item of data.promotions){const tr=document.createElement('tr'),offer=item.discount.type==='percentage'?item.discount.value+'% off':'CA$'+item.discount.value.toFixed(2)+' bundle price';for(const value of[item.name,bundleSummary(item.target),offer]){const td=document.createElement('td');td.append(text(value));tr.append(td)}const state=document.createElement('td');state.className=item.active?'active':'inactive';state.append(text(item.active?'Active':'Inactive'));tr.append(state);tr.append(buttonCell(item,'/api/bundle-promotions/',loadBundles,bundleStatus));bundleRows.append(tr)}if(!data.promotions.length)emptyRow(bundleRows,'No bundle promotions found.')}catch(error){bundleStatus.textContent=error.message}}
+bundleType.addEventListener('change',()=>{const percentage=bundleType.value==='percentageOff';bundleDiscount.max=percentage?'100':'100000';document.querySelector('#bundle-value-label span').textContent=percentage?'Discount (%)':'Bundle price (CAD)'});document.getElementById('bundle-refresh').addEventListener('click',loadBundles);document.getElementById('bundle-form').addEventListener('submit',async event=>{event.preventDefault();const button=document.getElementById('bundle-submit');button.disabled=true;bundleStatus.textContent='Creating bundle promotion…';const skus=document.getElementById('bundle-skus').value.split(/[\s,]+/).map(value=>value.trim()).filter(Boolean);try{await request('/api/bundle-promotions',{method:'POST',body:JSON.stringify({skus,name:document.getElementById('bundle-name').value,promotionType:bundleType.value,quantity:Number(document.getElementById('bundle-quantity').value),discount:Number(bundleDiscount.value),repeat:document.getElementById('bundle-repeat').checked})});bundleStatus.textContent='Bundle promotion created successfully.';event.target.reset();document.getElementById('bundle-quantity').value='2';document.getElementById('bundle-repeat').checked=true;await loadBundles()}catch(error){bundleStatus.textContent=error.message}finally{button.disabled=false}});
+loadProducts();loadBundles();`;

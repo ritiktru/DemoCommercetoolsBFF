@@ -9,9 +9,10 @@ import { AppModule } from './app.module.js';
 import type { CartService } from './carts/cart.js';
 import type { StorefrontService } from './storefront/storefront.js';
 import type { PromotionService } from './promotions/promotions.js';
+import type { RewardService } from './rewards/rewards.js';
 
-export async function createApp(customers: CustomerService, auth?: AuthOptions, carts?: CartService, storefront?: StorefrontService, promotions?: PromotionService): Promise<NestExpressApplication> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule.register(customers, auth, carts, storefront, promotions), {
+export async function createApp(customers: CustomerService, auth?: AuthOptions, carts?: CartService, storefront?: StorefrontService, promotions?: PromotionService, rewards?: RewardService): Promise<NestExpressApplication> {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule.register(customers, auth, carts, storefront, promotions, rewards), {
     bodyParser: false, logger: false, abortOnError: false,
   });
   app.getHttpAdapter().getInstance().disable('x-powered-by');

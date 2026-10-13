@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
-import { storeKeySchema, type AddItemInput, type CheckoutAddressInput, type BillingAddressInput, type StorefrontService } from './storefront/storefront.js';
+import { FLAT_DISCOUNT_CENTS, FLAT_DISCOUNT_CODE, FREE_SHIPPING_CODE, PERCENT_DISCOUNT, PERCENT_DISCOUNT_CODE, storeKeySchema, type AddItemInput, type ApplyDiscountInput, type CheckoutAddressInput, type BillingAddressInput, type RemoveDiscountInput, type StorefrontService, type UpdateItemInput } from './storefront/storefront.js';
 
 const money = z.object({ currencyCode: z.string(), centAmount: z.number().int(), fractionDigits: z.number().int().optional() });
 
@@ -112,6 +112,14 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       ...init, redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { Authorization: `Bearer ${await this.accessToken()}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
     });
+  }
+
+  async getOntarioTaxRate(): Promise<number> {
+    const response = await this.commerce('/tax-categories?limit=100');
+    if (!response.ok) return 0.13;
+    const result = z.object({ results: z.array(z.object({ rates: z.array(z.object({ country: z.string(), state: z.string().optional(), key: z.string().optional(), amount: z.number() })).default([]) })) }).safeParse(await response.json());
+    if (!result.success) return 0.13;
+    return result.data.results.flatMap(category => category.rates).find(rate => rate.country === 'CA' && rate.state === 'Ontario' && rate.key === 'ontario-hst')?.amount ?? 0.13;
   }
 
   async listStores() {
@@ -222,6 +230,18 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     await this.checkCartResponse(response); return { cart: cartSchema.parse(await response.json()) };
   }
 
+  async updateStoreCartItem(storeKey: string, input: UpdateItemInput, customer?: SessionCustomer) {
+    const { cart } = await this.getCheckoutCart(storeKey, input.cartId, customer);
+    if (cart.version !== input.version) throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
+    if (!cart.lineItems.some(item => item.id === input.lineItemId)) throw new CommerceError(404, 'LineItemNotFound', 'Item not found in cart');
+    const action = input.quantity === 0
+      ? { action: 'removeLineItem', lineItemId: input.lineItemId }
+      : { action: 'changeLineItemQuantity', lineItemId: input.lineItemId, quantity: input.quantity };
+    const response = await this.commerce(`/carts/${encodeURIComponent(input.cartId)}`, { method: 'POST', body: JSON.stringify({ version: cart.version, actions: [action] }) });
+    await this.checkCartResponse(response);
+    return { cart: cartSchema.parse(await response.json()) };
+  }
+
   private async getCheckoutCart(storeKey: string, cartId: string, customer?: SessionCustomer) {
     const response = await this.commerce(`/carts/${encodeURIComponent(cartId)}`);
     if (!response.ok) throw new CommerceError(404, 'CartNotFound', 'Cart not found');
@@ -304,6 +324,80 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     });
     await this.checkCartResponse(response);
     return { cart: cartSchema.parse(await response.json()) };
+  }
+
+  async applyStoreCartDiscount(storeKey: string, input: ApplyDiscountInput, customer?: SessionCustomer) {
+    const { cart, raw } = await this.getCheckoutCart(storeKey, input.cartId, customer);
+    if (cart.version !== input.version) throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
+    if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add a product before applying a code');
+
+    const code = input.code.trim().toUpperCase();
+    const existing = this.readDirectDiscounts(raw);
+    if (code === FREE_SHIPPING_CODE) {
+      const discounts = [...existing.filter(item => item.target.type !== 'shipping'), this.freeShippingDiscount()];
+      const response = await this.setDirectDiscounts(input.cartId, cart.version, discounts);
+      return { cart: cartSchema.parse(await response.json()), discountCode: FREE_SHIPPING_CODE, type: 'shipping' as const };
+    }
+
+    const product = this.directDiscountFor(code, cart.totalPrice.currencyCode, cart.totalPrice.centAmount);
+    const discounts = [...existing.filter(item => item.target.type === 'shipping'), product.action];
+    const response = await this.setDirectDiscounts(input.cartId, cart.version, discounts);
+    return {
+      cart: cartSchema.parse(await response.json()), discountCode: product.code, type: product.type,
+      percent: product.percent, amount: product.amount,
+    };
+  }
+
+  async removeStoreCartDiscount(storeKey: string, input: RemoveDiscountInput, customer?: SessionCustomer) {
+    const { cart, raw } = await this.getCheckoutCart(storeKey, input.cartId, customer);
+    if (cart.version !== input.version) throw new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again');
+    const existing = this.readDirectDiscounts(raw);
+    const discounts = input.kind === 'shipping'
+      ? existing.filter(item => item.target.type !== 'shipping')
+      : input.kind === 'product'
+        ? existing.filter(item => item.target.type === 'shipping')
+        : [];
+    const response = await this.setDirectDiscounts(input.cartId, cart.version, discounts);
+    return { cart: cartSchema.parse(await response.json()) };
+  }
+
+  private async setDirectDiscounts(cartId: string, version: number, discounts: Array<{ value: unknown; target: { type: string; predicate?: string } }>) {
+    const response = await this.commerce(`/carts/${encodeURIComponent(cartId)}`, {
+      method: 'POST', body: JSON.stringify({ version, actions: [{ action: 'setDirectDiscounts', discounts }] }),
+    });
+    await this.checkCartResponse(response);
+    return response;
+  }
+
+  private readDirectDiscounts(raw: unknown) {
+    const parsed = z.object({ directDiscounts: z.array(z.object({
+      value: z.unknown(), target: z.object({ type: z.string(), predicate: z.string().optional() }).passthrough(),
+    }).passthrough()).optional() }).safeParse(raw);
+    return parsed.success ? parsed.data.directDiscounts ?? [] : [];
+  }
+
+  private freeShippingDiscount() {
+    return { value: { type: 'relative' as const, permyriad: 10000 }, target: { type: 'shipping' as const } };
+  }
+
+  private directDiscountFor(code: string, currencyCode: string, cartCents: number) {
+    if (code === PERCENT_DISCOUNT_CODE) {
+      return {
+        code: PERCENT_DISCOUNT_CODE, type: 'percent' as const, percent: PERCENT_DISCOUNT, amount: undefined,
+        action: { value: { type: 'relative' as const, permyriad: PERCENT_DISCOUNT * 100 }, target: { type: 'lineItems' as const, predicate: '1 = 1' } },
+      };
+    }
+    if (code === FLAT_DISCOUNT_CODE) {
+      if (cartCents <= FLAT_DISCOUNT_CENTS) {
+        throw new CommerceError(400, 'DiscountExceedsCart', `Cart total must be more than $${(FLAT_DISCOUNT_CENTS / 100).toFixed(2)} to use ${FLAT_DISCOUNT_CODE}.`);
+      }
+      return {
+        code: FLAT_DISCOUNT_CODE, type: 'flat' as const, percent: undefined,
+        amount: { currencyCode, centAmount: FLAT_DISCOUNT_CENTS },
+        action: { value: { type: 'absolute' as const, money: [{ currencyCode, centAmount: FLAT_DISCOUNT_CENTS }] }, target: { type: 'lineItems' as const, predicate: '1 = 1' } },
+      };
+    }
+    throw new CommerceError(400, 'InvalidDiscountCode', `Invalid code. Use ${PERCENT_DISCOUNT_CODE} (10% off) or ${FLAT_DISCOUNT_CODE} ($25 off).`);
   }
 
   async createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer) {

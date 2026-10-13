@@ -19,6 +19,13 @@ export const cartSchema = z.object({
       price: money,
       freeAbove: money.optional(),
     }).optional(),
+    discountedPrice: z.object({
+      value: money,
+      includedDiscounts: z.array(z.object({
+        discount: z.object({ id: z.string(), typeId: z.string().optional() }),
+        discountedAmount: money,
+      })).default([]),
+    }).optional(),
   }).optional(),
   taxedPrice: z.object({
     totalNet: money,
@@ -29,6 +36,23 @@ export const cartSchema = z.object({
     id: z.string(), productId: z.string(), quantity: z.number().int(),
     name: z.record(z.string(), z.string()),
     variant: z.object({ id: z.number().int(), sku: z.string().optional() }),
+    price: z.object({
+      value: money,
+      discounted: z.object({
+        value: money,
+        discount: z.object({ id: z.string(), typeId: z.string().optional() }).optional(),
+      }).optional(),
+    }).optional(),
+    discountedPricePerQuantity: z.array(z.object({
+      quantity: z.number().int().positive(),
+      discountedPrice: z.object({
+        value: money,
+        includedDiscounts: z.array(z.object({
+          discount: z.object({ id: z.string(), typeId: z.string().optional() }),
+          discountedAmount: money,
+        })).default([]),
+      }),
+    })).default([]),
     totalPrice: money,
   })),
   createdAt: z.string(), lastModifiedAt: z.string(),

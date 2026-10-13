@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import { CommerceError } from '../commercetools.js';
-import type { CreatePromotionInput, PromotionService } from './promotions.js';
+import type { CreateBundlePromotionInput, CreatePromotionInput, PromotionService } from './promotions.js';
 
 const localizedString = z.record(z.string(), z.string());
 const money = z.object({ currencyCode: z.string(), centAmount: z.number().int() });
 const discountValue = z.discriminatedUnion('type', [
   z.object({ type: z.literal('relative'), permyriad: z.number().int() }),
   z.object({ type: z.literal('absolute'), money: z.array(money) }),
+  z.object({ type: z.literal('fixed'), money: z.array(money) }),
 ]);
 const productDiscount = z.object({
   id: z.string(),
@@ -17,6 +18,11 @@ const productDiscount = z.object({
   predicate: z.string(),
   isActive: z.boolean(),
   createdAt: z.string(),
+});
+const cartDiscount = z.object({
+  id: z.string(), key: z.string().optional(), name: localizedString,
+  value: discountValue, cartPredicate: z.string(), target: z.object({ type: z.string() }).passthrough(),
+  isActive: z.boolean(), createdAt: z.string(),
 });
 
 export class CommercetoolsPromotionClient implements PromotionService {
@@ -70,7 +76,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
         name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
         predicate: discount.predicate,
         active: discount.isActive,
-        discount: discount.value.type === 'relative'
+      discount: discount.value.type === 'relative'
           ? { type: 'percentage', value: discount.value.permyriad / 100 }
           : { type: 'fixed', value: (discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount ?? 0) / 100 },
         createdAt: discount.createdAt,
@@ -123,6 +129,81 @@ export class CommercetoolsPromotionClient implements PromotionService {
     if (response.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Product discount was not found');
     if (response.status === 409) throw new CommerceError(409, 'PromotionChanged', 'Product discount changed; refresh and try again');
     if (!response.ok) throw new CommerceError(502, 'PromotionRemovalFailed', 'Unable to remove the product discount');
+    return { removed: true, id };
+  }
+
+  async listBundlePromotions() {
+    const response = await this.commerce('/cart-discounts?sort=createdAt%20desc&limit=100');
+    if (!response.ok) throw new CommerceError(502, 'BundlePromotionListFailed', 'Unable to load bundle promotions');
+    const result = z.object({ results: z.array(cartDiscount) }).parse(await response.json());
+    return { promotions: result.results.filter(discount => discount.target.type === 'pattern').map(discount => ({
+      id: discount.id,
+      key: discount.key,
+      name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
+      active: discount.isActive,
+      discount: discount.value.type === 'relative'
+        ? { type: 'percentage', value: discount.value.permyriad / 100 }
+        : { type: 'fixedBundlePrice', value: (discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount ?? 0) / 100 },
+      target: discount.target,
+      createdAt: discount.createdAt,
+    })) };
+  }
+
+  private async verifySkus(skus: string[]) {
+    const missing: string[] = [];
+    for (const sku of skus) {
+      const response = await this.commerce(`/product-projections?${new URLSearchParams({
+        where: `masterVariant(sku=\"${sku}\") or variants(sku=\"${sku}\")`, limit: '1',
+      })}`);
+      if (!response.ok) throw new CommerceError(502, 'ProductLookupFailed', `Unable to verify SKU ${sku}`);
+      const result = z.object({ total: z.number().int() }).parse(await response.json());
+      if (result.total < 1) missing.push(sku);
+    }
+    if (missing.length) throw new CommerceError(404, 'SkuNotFound', `No published product was found for: ${missing.join(', ')}`);
+  }
+
+  async createBundlePromotion(input: CreateBundlePromotionInput) {
+    await this.verifySkus(input.skus);
+    if (input.promotionType === 'percentageOff' && input.discount > 100) {
+      throw new CommerceError(400, 'InvalidDiscount', 'Percentage discount cannot exceed 100');
+    }
+    const suffix = Date.now().toString();
+    const predicate = `sku in (${input.skus.map(sku => `\"${sku}\"`).join(', ')})`;
+    const body = {
+      key: `bff-bundle-${suffix}`,
+      name: { 'en-CA': input.name, en: input.name },
+      description: { 'en-CA': `${input.quantity} qualifying items from ${input.skus.length} SKUs` },
+      value: input.promotionType === 'percentageOff'
+        ? { type: 'relative', permyriad: Math.round(input.discount * 100), applicationMode: 'IndividualApplication' }
+        : { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'EvenDistribution' },
+      cartPredicate: '1 = 1',
+      target: {
+        type: 'pattern', triggerPattern: [],
+        targetPattern: [{ type: 'CountOnLineItemUnits', predicate, minCount: input.quantity, maxCount: input.quantity }],
+        ...(input.repeat ? {} : { maxOccurrence: 1 }), selectionMode: 'Cheapest',
+      },
+      sortOrder: `0.${suffix.slice(-12)}`,
+      isActive: true, requiresDiscountCode: false, stackingMode: 'Stacking',
+    };
+    const response = await this.commerce('/cart-discounts', { method: 'POST', body: JSON.stringify(body) });
+    if (!response.ok) {
+      let message = 'commercetools rejected the bundle promotion';
+      try { const error = z.object({ message: z.string().optional() }).parse(await response.json()); if (error.message) message = error.message; } catch { /* safe fallback */ }
+      throw new CommerceError(response.status === 400 ? 400 : 502, 'BundlePromotionCreationFailed', message);
+    }
+    const created = cartDiscount.parse(await response.json());
+    return { promotion: { id: created.id, key: created.key, name: input.name, active: created.isActive } };
+  }
+
+  async removeBundlePromotion(id: string) {
+    const currentResponse = await this.commerce(`/cart-discounts/${encodeURIComponent(id)}`);
+    if (currentResponse.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Cart discount was not found');
+    if (!currentResponse.ok) throw new CommerceError(502, 'PromotionReadFailed', 'Unable to read the cart discount');
+    const current = z.object({ version: z.number().int().positive() }).parse(await currentResponse.json());
+    const response = await this.commerce(`/cart-discounts/${encodeURIComponent(id)}?version=${current.version}`, { method: 'DELETE' });
+    if (response.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Cart discount was not found');
+    if (response.status === 409) throw new CommerceError(409, 'PromotionChanged', 'Cart discount changed; refresh and try again');
+    if (!response.ok) throw new CommerceError(502, 'PromotionRemovalFailed', 'Unable to remove the cart discount');
     return { removed: true, id };
   }
 }

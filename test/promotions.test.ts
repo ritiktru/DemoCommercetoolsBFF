@@ -63,3 +63,58 @@ test('promotion client reads the latest version before removing a Product Discou
   assert.equal(requests.at(-1)?.method, 'DELETE');
   assert.ok(requests.at(-1)?.url.endsWith('?version=7'));
 });
+
+test('promotion client creates a repeating mix-and-match fixed bundle price', async () => {
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({ id: 'cart-discount-id', key: draft.key, name: draft.name, value: draft.value, cartPredicate: draft.cartPredicate, target: draft.target, isActive: true, createdAt: '2026-10-13T00:00:00.000Z' }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  await client.createBundlePromotion({ skus: ['SKU-A', 'SKU-B', 'SKU-C'], name: 'Any 2 for $10', promotionType: 'fixedBundlePrice', quantity: 2, discount: 10, repeat: true });
+  assert.deepEqual(draft.value, { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: 1000, fractionDigits: 2 }], applicationMode: 'EvenDistribution' });
+  assert.deepEqual(draft.target, {
+    type: 'pattern', triggerPattern: [],
+    targetPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku in ("SKU-A", "SKU-B", "SKU-C")', minCount: 2, maxCount: 2 }],
+    selectionMode: 'Cheapest',
+  });
+  assert.equal(draft.requiresDiscountCode, false);
+});
+
+test('promotion client creates a one-time percentage bundle promotion', async () => {
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({ id: 'cart-discount-id', key: draft.key, name: draft.name, value: draft.value, cartPredicate: draft.cartPredicate, target: draft.target, isActive: true, createdAt: '2026-10-13T00:00:00.000Z' }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  await client.createBundlePromotion({ skus: ['SKU-A', 'SKU-B'], name: 'Any 2 get 20% off', promotionType: 'percentageOff', quantity: 2, discount: 20, repeat: false });
+  assert.deepEqual(draft.value, { type: 'relative', permyriad: 2000, applicationMode: 'IndividualApplication' });
+  assert.equal(draft.target.maxOccurrence, 1);
+});
+
+test('promotion client reports all missing eligible SKUs before creating a bundle promotion', async () => {
+  const fetcher = async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: url.includes('SKU-A') ? 1 : 0 });
+    throw new Error('Cart Discount creation must not be called');
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  await assert.rejects(
+    client.createBundlePromotion({ skus: ['SKU-A', 'MISSING'], name: 'Bundle', promotionType: 'fixedBundlePrice', quantity: 2, discount: 10, repeat: true }),
+    (error: unknown) => error instanceof Error && error.message.includes('MISSING'),
+  );
+});
