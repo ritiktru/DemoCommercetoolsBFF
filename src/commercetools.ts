@@ -6,6 +6,8 @@ import { cartSchema, type CartInput, type CartResult, type CartService } from '.
 import type { SessionCustomer } from './sessions.js';
 import { storeKeySchema, type AddItemInput, type CheckoutAddressInput, type BillingAddressInput, type StorefrontService } from './storefront/storefront.js';
 
+const money = z.object({ currencyCode: z.string(), centAmount: z.number().int(), fractionDigits: z.number().int().optional() });
+
 export const customerInput = z.strictObject({
   email: z.email().max(254),
   firstName: z.string().trim().min(1).max(100).optional(),
@@ -36,7 +38,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   private storeProvince(storeKey: string, store: unknown): string | undefined {
     const configured = z.object({ address: z.object({ state: z.string().optional() }).optional() }).safeParse(store);
     if (configured.success && configured.data.address?.state) return configured.data.address.state;
-    return ({ 'sobeys-0320': 'NL', 'sobeys-0657': 'ON' } as Record<string, string>)[storeKey];
+    return ({ 'sobeys-0320': 'Newfoundland and Labrador', 'sobeys-0657': 'Ontario' } as Record<string, string>)[storeKey];
   }
 
   private async accessToken(): Promise<string> {
@@ -94,7 +96,13 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     if (response.ok) return;
     if (response.status === 401) this.token = undefined;
     if (response.status === 404) throw new CommerceError(404, 'CartNotFound', 'Cart or referenced customer not found');
-    if (response.status === 400) throw new CommerceError(400, 'InvalidCart', 'Commerce rejected the cart update. Check product, tax, address, and shipping configuration.');
+    if (response.status === 400) {
+      const body = z.object({ errors: z.array(z.object({ code: z.string() })).optional() }).safeParse(await response.json().catch(() => null));
+      const upstreamCode = body.success ? body.data.errors?.[0]?.code : undefined;
+      throw new CommerceError(400, 'InvalidCart', upstreamCode
+        ? `Commerce rejected the cart update (${upstreamCode}).`
+        : 'Commerce rejected the cart update. Check product, tax, address, and shipping configuration.');
+    }
     if (response.status === 429) throw new CommerceError(503, 'CommerceBusy', 'Commerce service is busy; try again later');
     throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to complete cart request in commerce service');
   }
@@ -229,9 +237,9 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   async setCheckoutAddress(storeKey: string, input: CheckoutAddressInput, customer?: SessionCustomer) {
     const { cart } = await this.getCheckoutCart(storeKey, input.cartId, customer);
     if (!cart.lineItems.length) throw new CommerceError(400, 'EmptyCart', 'Add at least one product before checkout');
-    // Tax Rates use canonical Canadian province codes and state matching is exact.
-    const state = /^on(tario)?$/i.test(input.address.state) ? 'ON'
-      : /^(nl|newfoundland( and labrador)?)$/i.test(input.address.state) ? 'NL'
+    // Tax and shipping configuration use full Canadian province names and state matching is exact.
+    const state = /^on(tario)?$/i.test(input.address.state) ? 'Ontario'
+      : /^(nl|newfoundland( and labrador)?)$/i.test(input.address.state) ? 'Newfoundland and Labrador'
       : input.address.state.toUpperCase();
     const address = { ...input.address, state, country: 'CA', email: input.email };
     const actions: object[] = [
@@ -253,12 +261,28 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     }
     const response = await this.commerce(`/shipping-methods/matching-cart?cartId=${encodeURIComponent(cartId)}`);
     if (!response.ok) throw new CommerceError(502, 'ShippingMethodsFailed', 'Unable to load shipping methods');
-    const result = z.object({ results: z.array(z.object({ id: z.string(), name: z.string(), isDefault: z.boolean().optional() })) }).parse(await response.json());
+    const result = z.object({ results: z.array(z.object({
+      id: z.string(), name: z.string(), isDefault: z.boolean().optional(),
+      zoneRates: z.array(z.object({
+        shippingRates: z.array(z.object({
+          price: money,
+          freeAbove: money.optional(),
+        })),
+      })).optional(),
+    })) }).parse(await response.json());
     const activePass = this.config.DELIVERY_PASS_SHIPPING_METHOD_ID && customer ? await this.hasActiveDeliveryPass(customer.id) : false;
     const shippingMethods = this.config.DELIVERY_PASS_SHIPPING_METHOD_ID && !activePass
       ? result.results.filter(method => method.id !== this.config.DELIVERY_PASS_SHIPPING_METHOD_ID)
       : result.results;
-    return { shippingMethods };
+    return {
+      shippingMethods: shippingMethods.map(method => ({
+        id: method.id,
+        name: method.name,
+        isDefault: method.isDefault,
+        price: method.zoneRates?.[0]?.shippingRates?.[0]?.price,
+        freeAbove: method.zoneRates?.[0]?.shippingRates?.[0]?.freeAbove,
+      })),
+    };
   }
 
   private async hasActiveDeliveryPass(customerId: string) {

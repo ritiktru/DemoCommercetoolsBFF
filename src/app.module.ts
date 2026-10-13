@@ -9,14 +9,16 @@ import { CartsModule } from './carts/carts.module.js';
 import type { CartService } from './carts/cart.js';
 import { StorefrontModule } from './storefront/storefront.module.js';
 import type { StorefrontService } from './storefront/storefront.js';
+import { PromotionsModule } from './promotions/promotions.module.js';
+import type { PromotionService } from './promotions/promotions.js';
 
 @Module({})
 export class AppModule {
-  static register(customers: CustomerService, auth?: AuthOptions, carts?: CartService, storefront?: StorefrontService): DynamicModule {
+  static register(customers: CustomerService, auth?: AuthOptions, carts?: CartService, storefront?: StorefrontService, promotions?: PromotionService): DynamicModule {
     const authentication = AuthModule.register(auth);
     return {
       module: AppModule,
-      imports: [CustomersModule.register(customers), authentication, ...(carts ? [CartsModule.register(carts, authentication)] : []), ...(storefront ? [StorefrontModule.register(storefront, authentication)] : [])],
+      imports: [CustomersModule.register(customers), authentication, ...(carts ? [CartsModule.register(carts, authentication)] : []), ...(storefront ? [StorefrontModule.register(storefront, authentication)] : []), ...(promotions ? [PromotionsModule.register(promotions)] : [])],
       controllers: [AppController],
       providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],
     };

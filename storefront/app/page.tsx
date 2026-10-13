@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 type Store = { key: string; name: string };
 type Money = { currencyCode: string; centAmount: number };
 type Product = { id: string; name?: string; sku?: string; brand?: unknown; price?: Money };
+type DeliveryPass = { product: { name: string; sku: string; price: Money } };
 type Cart = {
   id: string;
   version: number;
@@ -69,6 +70,7 @@ export default function Home() {
   const [stores, setStores] = useState<Store[]>([]);
   const [storeKey, setStoreKey] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
+  const [search, setSearch] = useState('');
   const [cart, setCart] = useState<Cart>();
   const [customer, setCustomer] = useState<{ email: string }>();
   const [status, setStatus] = useState('Loading stores…');
@@ -97,6 +99,9 @@ export default function Home() {
   const [freeShippingApplied, setFreeShippingApplied] = useState(false);
   const [freeShippingCode, setFreeShippingCode] = useState('');
   const [busy, setBusy] = useState(false);
+  const [deliveryPass, setDeliveryPass] = useState<DeliveryPass>();
+  const [passCartId, setPassCartId] = useState('');
+  const [showPassCheckout, setShowPassCheckout] = useState(false);
 
   useEffect(() => {
     api('/api/storefront/stores')
@@ -115,6 +120,9 @@ export default function Home() {
     api('/api/storefront/tax-rate')
       .then(data => setTaxRate(data.rate ?? 0.13))
       .catch(() => setTaxRate(0.13));
+    api('/api/storefront/delivery-pass')
+      .then(data => setDeliveryPass(data))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -134,6 +142,20 @@ export default function Home() {
       })
       .catch(error => setStatus(error.message));
   }, [storeKey]);
+
+  useEffect(() => {
+    if (!storeKey || !search.trim()) return;
+    const timer = window.setTimeout(() => {
+      setStatus('Searching products…');
+      api(`/api/storefront/stores/${storeKey}/products/search?q=${encodeURIComponent(search.trim())}&limit=50`)
+        .then(data => {
+          setProducts(data.products);
+          setStatus(`${data.total} matching products`);
+        })
+        .catch(error => setStatus(error.message));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [storeKey, search]);
 
   async function signIn() {
     try {
@@ -172,6 +194,57 @@ export default function Home() {
       setStatus('Complete Google sign-in.');
     } catch (error) {
       setStatus((error as Error).message);
+    }
+  }
+
+  async function startDeliveryPass() {
+    if (!customer) {
+      setStatus('Sign in before purchasing a Delivery Pass.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api('/api/storefront/delivery-pass/cart', { method: 'POST', body: '{}' });
+      setPassCartId(data.cart.id);
+      setShowPassCheckout(true);
+      setStatus('Enter your address to purchase the Delivery Pass.');
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveDeliveryPassAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!passCartId) return;
+    setBusy(true);
+    try {
+      const data = await api('/api/storefront/delivery-pass/address', {
+        method: 'POST',
+        body: JSON.stringify({ cartId: passCartId, email, address }),
+      });
+      const session = await api('/api/storefront/delivery-pass/checkout-session', {
+        method: 'POST',
+        body: JSON.stringify({ cartId: data.cart.id }),
+      });
+      if (!window.ctc) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/@commercetools/checkout-browser-sdk@latest/browser/sdk.js';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Checkout SDK failed to load'));
+          document.head.appendChild(script);
+        });
+      }
+      if (!window.ctc) throw new Error('Checkout SDK is unavailable');
+      window.ctc('paymentFlow', { projectKey: 'sobeys-dev', region: 'us-central1.gcp', sessionId: session.sessionId, locale: 'en-CA' });
+      setStatus('Delivery Pass payment started.');
+      setShowPassCheckout(false);
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -368,7 +441,8 @@ export default function Home() {
         body: JSON.stringify({ cartId: cart.id, version: cart.version, kind: 'shipping' }),
       });
       setCart(data.cart);
-      setFreeShippingApplied(false);
+    setFreeShippingApplied(false);
+    setSearch('');
       setStatus('Free shipping removed.');
     } catch (error) {
       setStatus((error as Error).message);
@@ -500,8 +574,18 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
           {status}
         </div>
       </section>
+      {deliveryPass && (
+        <section className="deliveryPassBanner">
+          <div>
+            <strong>{deliveryPass.product.name}</strong>
+            <span>{money(deliveryPass.product.price)} for 12 months</span>
+          </div>
+          <button type="button" disabled={busy} onClick={() => void startDeliveryPass()}>Buy Delivery Pass</button>
+        </section>
+      )}
       <div className="layout">
         <section>
+          <input aria-label="Search products" placeholder="Search products…" value={search} onChange={event => setSearch(event.target.value)} />
           <div className="sectionTitle">
             <h2>Available products</h2>
             <span>{products.length} items</span>
@@ -720,6 +804,21 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
               </button>
             </div>
           )}
+        </section>
+      )}
+      {showPassCheckout && (
+        <section className="checkoutPanel">
+          <h2>Delivery Pass address</h2>
+          <form onSubmit={saveDeliveryPassAddress} className="checkoutForm">
+            <label>Email<input type="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
+            <label>First name<input required value={address.firstName} onChange={event => updateAddress('firstName', event.target.value)} /></label>
+            <label>Last name<input required value={address.lastName} onChange={event => updateAddress('lastName', event.target.value)} /></label>
+            <label>Street address<input required value={address.streetName} onChange={event => updateAddress('streetName', event.target.value)} /></label>
+            <label>City<input required value={address.city} onChange={event => updateAddress('city', event.target.value)} /></label>
+            <label>Province<input required placeholder="ON" value={address.state} onChange={event => updateAddress('state', event.target.value)} /></label>
+            <label>Postal code<input required value={address.postalCode} onChange={event => updateAddress('postalCode', event.target.value)} /></label>
+            <button disabled={busy} type="submit">Continue to Delivery Pass payment</button>
+          </form>
         </section>
       )}
 

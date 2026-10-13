@@ -12,6 +12,14 @@ export const cartSchema = z.object({
   customerId: z.string().optional(), customerEmail: z.string().optional(),
   cartState: z.string(), country: z.string().optional(),
   totalPrice: money,
+  shippingInfo: z.object({
+    shippingMethodName: z.string().optional(),
+    price: money.optional(),
+    shippingRate: z.object({
+      price: money,
+      freeAbove: money.optional(),
+    }).optional(),
+  }).optional(),
   taxedPrice: z.object({
     totalNet: money,
     totalGross: money,
