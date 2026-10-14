@@ -42,7 +42,7 @@ export class PromotionsController {
   @Post('api/bundle-promotions')
   createBundle(@Body() body: unknown) {
     const input = createBundlePromotionInput.safeParse(body);
-    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide at least two valid SKUs, a quantity of 2 or more, a name, and a positive price or percentage');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide at least one valid SKU, a quantity of 2 or more, a name, and a positive price or percentage');
     return this.promotions.createBundlePromotion(input.data);
   }
 

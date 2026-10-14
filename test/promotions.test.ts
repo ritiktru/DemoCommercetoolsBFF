@@ -187,6 +187,32 @@ test('promotion client creates a repeating mix-and-match fixed bundle price', as
   assert.equal(draft.requiresDiscountCode, false);
 });
 
+test('promotion client creates a repeating fixed bundle price for multiple units of one SKU', async () => {
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({ id: 'same-sku-bundle-id', key: draft.key, name: draft.name, value: draft.value, cartPredicate: draft.cartPredicate, target: draft.target, isActive: true, createdAt: '2026-10-14T00:00:00.000Z' }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  await client.createBundlePromotion({ skus: ['680705-EA'], name: 'Buy 2 for $5', promotionType: 'fixedBundlePrice', quantity: 2, discount: 5, repeat: true });
+  assert.deepEqual(draft.value, {
+    type: 'fixed',
+    money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: 500, fractionDigits: 2 }],
+    applicationMode: 'EvenDistribution',
+  });
+  assert.deepEqual(draft.target, {
+    type: 'pattern', triggerPattern: [],
+    targetPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku in ("680705-EA")', minCount: 2, maxCount: 2 }],
+    selectionMode: 'Cheapest',
+  });
+});
+
 test('promotion client creates a one-time percentage bundle promotion', async () => {
   let draft: any;
   const fetcher = async (input: string | URL | Request, init?: RequestInit) => {

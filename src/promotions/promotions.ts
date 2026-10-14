@@ -20,8 +20,8 @@ export const createPromotionInput = z.strictObject({
 export type CreatePromotionInput = z.infer<typeof createPromotionInput>;
 
 export const createBundlePromotionInput = z.strictObject({
-  skus: z.array(z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9._-]+$/)).min(2).max(100)
-    .transform(skus => [...new Set(skus)]).refine(skus => skus.length >= 2, 'Provide at least two unique SKUs'),
+  skus: z.array(z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9._-]+$/)).min(1).max(100)
+    .transform(skus => [...new Set(skus)]),
   name: z.string().trim().min(1).max(120),
   promotionType: z.enum(['fixedBundlePrice', 'percentageOff']),
   quantity: z.number().int().min(2).max(100),
