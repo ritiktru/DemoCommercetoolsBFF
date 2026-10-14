@@ -46,6 +46,93 @@ test('promotion client rejects an unknown SKU before creating a discount', async
   );
 });
 
+test('promotion client creates a fixed final price for one SKU as a Cart Discount', async () => {
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({
+        id: 'cart-discount-id', key: draft.key, name: draft.name, value: draft.value,
+        cartPredicate: draft.cartPredicate, target: draft.target, isActive: true,
+        createdAt: '2026-10-14T00:00:00.000Z',
+      }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  const result = await client.createPromotion({ sku: '680705-EA', name: 'Huggies for $2', discountType: 'finalPrice', discount: 2 });
+  assert.equal(result.promotion.resourceType, 'cart-discount');
+  assert.deepEqual(draft.value, {
+    type: 'fixed',
+    money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: 200, fractionDigits: 2 }],
+    applicationMode: 'IndividualApplication',
+  });
+  assert.deepEqual(draft.target, { type: 'lineItems', predicate: 'sku = "680705-EA"' });
+  assert.equal(draft.cartPredicate, '1 = 1');
+  assert.equal(draft.requiresDiscountCode, false);
+});
+
+test('promotion client creates a repeating buy one get one free promotion for one SKU', async () => {
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({
+        id: 'bogo-id', key: draft.key, name: draft.name, value: draft.value,
+        cartPredicate: draft.cartPredicate, target: draft.target, isActive: true,
+        createdAt: '2026-10-14T00:00:00.000Z',
+      }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  const result = await client.createPromotion({
+    sku: '680705-EA', name: 'Huggies BOGO', discountType: 'bogo',
+    buyQuantity: 1, freeQuantity: 1, repeat: true,
+  });
+  assert.equal(result.promotion.resourceType, 'cart-discount');
+  assert.deepEqual(draft.value, { type: 'relative', permyriad: 10000, applicationMode: 'IndividualApplication' });
+  assert.deepEqual(draft.target, {
+    type: 'pattern',
+    triggerPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku = "680705-EA"', minCount: 1, maxCount: 1 }],
+    targetPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku = "680705-EA"', minCount: 1, maxCount: 1 }],
+    selectionMode: 'Cheapest',
+  });
+  assert.equal(draft.requiresDiscountCode, false);
+});
+
+test('promotion client lists BOGO promotions created from the dashboard', async () => {
+  const fetcher = async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-discounts?')) return Response.json({ results: [] });
+    if (url.includes('/cart-discounts?')) return Response.json({ results: [{
+      id: 'bogo-id', key: 'bff-bogo-680705-ea-123', name: { 'en-CA': 'Huggies BOGO' },
+      value: { type: 'relative', permyriad: 10000, applicationMode: 'IndividualApplication' },
+      cartPredicate: '1 = 1', isActive: true, createdAt: '2026-10-14T00:00:00.000Z',
+      target: {
+        type: 'pattern',
+        triggerPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku = "680705-EA"', minCount: 1, maxCount: 1 }],
+        targetPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku = "680705-EA"', minCount: 1, maxCount: 1 }],
+        selectionMode: 'Cheapest',
+      },
+    }] });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  const result: any = await client.listPromotions();
+  assert.deepEqual(result.promotions[0].discount, {
+    type: 'bogo', value: 100, buyQuantity: 1, freeQuantity: 1, repeat: true,
+  });
+  assert.equal(result.promotions[0].resourceType, 'cart-discount');
+});
+
 test('promotion client reads the latest version before removing a Product Discount', async () => {
   const id = 'f69eba03-187b-4292-b92f-4f6df88f2bb9';
   const requests: Array<{ url: string; method?: string }> = [];
@@ -62,6 +149,19 @@ test('promotion client reads the latest version before removing a Product Discou
   assert.deepEqual(await client.removePromotion(id), { removed: true, id });
   assert.equal(requests.at(-1)?.method, 'DELETE');
   assert.ok(requests.at(-1)?.url.endsWith('?version=7'));
+});
+
+test('promotion client removes a final-price Cart Discount from the product promotion dashboard', async () => {
+  const id = 'f69eba03-187b-4292-b92f-4f6df88f2bb9';
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.endsWith(`/cart-discounts/${id}`)) return Response.json({ id, version: 4 });
+    if (url.endsWith(`/cart-discounts/${id}?version=4`) && init?.method === 'DELETE') return Response.json({ id, version: 5 });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  assert.deepEqual(await client.removePromotion(id, 'cart-discount'), { removed: true, id });
 });
 
 test('promotion client creates a repeating mix-and-match fixed bundle price', async () => {

@@ -9,6 +9,7 @@ type Cart = {
   id: string;
   version: number;
   totalPrice: Money;
+  taxedPrice?: { totalNet: Money; totalGross: Money; taxPortions?: Array<{ rate: number; amount: Money }> };
   lineItems: Array<{
     id: string;
     name: Record<string, string>;
@@ -23,6 +24,7 @@ type Cart = {
         includedDiscounts: Array<{ discount: { id: string; typeId?: string }; discountedAmount: Money }>;
       };
     }>;
+    taxedPrice?: { totalNet: Money; totalGross: Money };
   }>;
   shippingInfo?: {
     shippingMethodName?: string;
@@ -31,6 +33,7 @@ type Cart = {
       value?: Money;
       includedDiscounts?: Array<{ discount: { id: string; typeId?: string }; discountedAmount: Money }>;
     };
+    taxedPrice?: { totalNet: Money; totalGross: Money };
   };
 };
 type ShippingMethod = { id: string; name: string; isDefault?: boolean; price?: Money; freeAbove?: Money };
@@ -608,25 +611,34 @@ export default function Home() {
   const freeAboveCents = selectedShipping?.freeAbove?.centAmount ?? 0;
   const autoFreeShipping = freeAboveCents > 0 && (itemsTotal?.centAmount ?? 0) >= freeAboveCents;
 
-  const shippingNet = freeShippingApplied || autoFreeShipping ? 0 : (listedShipping?.centAmount ?? 0);
-const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.length > 0;
-  
-
-  const itemsTax = showShippingAndTax && taxRate !== null
-    ? Math.round((itemsTotal?.centAmount ?? 0) * taxRate)
+  const fallbackShippingNet = freeShippingApplied || autoFreeShipping ? 0 : (listedShipping?.centAmount ?? 0);
+  const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.length > 0;
+  const commerceShippingTaxed = cart?.shippingInfo?.taxedPrice;
+  const shippingNet = commerceShippingTaxed?.totalNet.centAmount
+    ?? cart?.shippingInfo?.discountedPrice?.value?.centAmount
+    ?? fallbackShippingNet;
+  const shippingTax = showShippingAndTax
+    ? commerceShippingTaxed
+      ? commerceShippingTaxed.totalGross.centAmount - commerceShippingTaxed.totalNet.centAmount
+      : Math.round(shippingNet * (taxRate ?? 0))
     : 0;
-
-  const shippingTax = showShippingAndTax && taxRate !== null
-    ? Math.round(shippingNet * taxRate)
+  const shippingGross = showShippingAndTax
+    ? commerceShippingTaxed?.totalGross.centAmount ?? shippingNet + shippingTax
+    : shippingNet;
+  const commerceItemsTax = cart?.lineItems.reduce((sum, item) => {
+    const taxed = item.taxedPrice;
+    return sum + (taxed ? taxed.totalGross.centAmount - taxed.totalNet.centAmount : 0);
+  }, 0);
+  const allLineTaxesAvailable = cart?.lineItems.every(item => Boolean(item.taxedPrice)) ?? false;
+  const itemsTax = showShippingAndTax
+    ? allLineTaxesAvailable
+      ? commerceItemsTax ?? 0
+      : Math.round((itemsTotal?.centAmount ?? 0) * (taxRate ?? 0))
     : 0;
-
-  const shippingGross = shippingNet + shippingTax;
-
   const displayTotal = itemsTotal
-    ? {
-        currencyCode: itemsTotal.currencyCode,
-        centAmount: itemsTotal.centAmount + shippingGross + itemsTax,
-      }
+    ? showShippingAndTax && cart?.taxedPrice
+      ? cart.taxedPrice.totalGross
+      : { currencyCode: itemsTotal.currencyCode, centAmount: itemsTotal.centAmount + shippingGross + itemsTax }
     : undefined;
 
   return (
@@ -750,7 +762,7 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
                     <strong>{money({ currencyCode: 'CAD', centAmount: shippingGross })}</strong>
                   </div>
                   <div className="total">
-                    <span>Tax (Ontario HST {Math.round((taxRate ?? 0) * 100)}%)</span>
+                    <span>Item tax (calculated by commercetools)</span>
                     <strong>{money({ currencyCode: 'CAD', centAmount: itemsTax })}</strong>
                   </div>
                 </>
@@ -964,7 +976,7 @@ const showShippingAndTax = (showCheckout || orderPlaced) && shippingMethods.leng
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-              <span>Tax (Ontario HST {Math.round((taxRate ?? 0) * 100)}%)</span>
+              <span>Item tax (calculated by commercetools)</span>
               <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.itemsTax })}</strong>
             </div>
 

@@ -24,6 +24,13 @@ const cartDiscount = z.object({
   value: discountValue, cartPredicate: z.string(), target: z.object({ type: z.string() }).passthrough(),
   isActive: z.boolean(), createdAt: z.string(),
 });
+const patternTarget = z.object({
+  type: z.literal('pattern'),
+  triggerPattern: z.array(z.object({ type: z.string(), predicate: z.string(), minCount: z.number().int().optional(), maxCount: z.number().int().optional() })),
+  targetPattern: z.array(z.object({ type: z.string(), predicate: z.string(), minCount: z.number().int().optional(), maxCount: z.number().int().optional() })),
+  maxOccurrence: z.number().int().optional(),
+  selectionMode: z.string(),
+});
 
 export class CommercetoolsPromotionClient implements PromotionService {
   private token?: { value: string; expiresAt: number };
@@ -66,12 +73,20 @@ export class CommercetoolsPromotionClient implements PromotionService {
   }
 
   async listPromotions() {
-    const response = await this.commerce('/product-discounts?sort=createdAt%20desc&limit=100');
-    if (!response.ok) throw new CommerceError(502, 'PromotionListFailed', 'Unable to load product promotions');
-    const result = z.object({ results: z.array(productDiscount) }).parse(await response.json());
+    const [productResponse, cartResponse] = await Promise.all([
+      this.commerce('/product-discounts?sort=createdAt%20desc&limit=100'),
+      this.commerce('/cart-discounts?sort=createdAt%20desc&limit=100'),
+    ]);
+    if (!productResponse.ok || !cartResponse.ok) throw new CommerceError(502, 'PromotionListFailed', 'Unable to load product promotions');
+    const result = z.object({ results: z.array(productDiscount) }).parse(await productResponse.json());
+    const cartResult = z.object({ results: z.array(cartDiscount) }).parse(await cartResponse.json());
+    const singleProductCartPromotions = cartResult.results.filter(discount =>
+      (discount.key?.startsWith('bff-final-price-') && discount.target.type === 'lineItems' && discount.value.type === 'fixed') ||
+      (discount.key?.startsWith('bff-bogo-') && discount.target.type === 'pattern' && discount.value.type === 'relative'));
     return {
-      promotions: result.results.map(discount => ({
+      promotions: [...result.results.map(discount => ({
         id: discount.id,
+        resourceType: 'product-discount' as const,
         key: discount.key,
         name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
         predicate: discount.predicate,
@@ -80,7 +95,26 @@ export class CommercetoolsPromotionClient implements PromotionService {
           ? { type: 'percentage', value: discount.value.permyriad / 100 }
           : { type: 'fixed', value: (discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount ?? 0) / 100 },
         createdAt: discount.createdAt,
-      })),
+      })), ...singleProductCartPromotions.map(discount => {
+        const bogo = discount.key?.startsWith('bff-bogo-');
+        const target = bogo ? patternTarget.safeParse(discount.target) : undefined;
+        const trigger = target?.success ? target.data.triggerPattern[0] : undefined;
+        const reward = target?.success ? target.data.targetPattern[0] : undefined;
+        return {
+        id: discount.id,
+        resourceType: 'cart-discount' as const,
+        key: discount.key,
+        name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
+        predicate: bogo ? (trigger?.predicate ?? '') : ('predicate' in discount.target && typeof discount.target.predicate === 'string' ? discount.target.predicate : ''),
+        active: discount.isActive,
+        discount: bogo
+          ? { type: 'bogo', value: 100, buyQuantity: trigger?.maxCount ?? trigger?.minCount ?? 1, freeQuantity: reward?.maxCount ?? reward?.minCount ?? 1, repeat: !target?.success || target.data.maxOccurrence === undefined }
+          : { type: 'finalPrice', value: (discount.value.type === 'fixed' ? discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount : 0) ?? 0 },
+        createdAt: discount.createdAt,
+      }; }).map(discount => discount.discount.type === 'finalPrice'
+        ? { ...discount, discount: { ...discount.discount, value: discount.discount.value / 100 } }
+        : discount)]
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     };
   }
 
@@ -93,16 +127,62 @@ export class CommercetoolsPromotionClient implements PromotionService {
     if (productResult.total < 1) throw new CommerceError(404, 'SkuNotFound', `No published product was found for SKU ${input.sku}`);
 
     const percentage = input.discountType === 'percentage';
-    if (percentage && input.discount > 100) throw new CommerceError(400, 'InvalidDiscount', 'Percentage discount cannot exceed 100');
+    const discountAmount = input.discount ?? 0;
+    if (percentage && discountAmount > 100) throw new CommerceError(400, 'InvalidDiscount', 'Percentage discount cannot exceed 100');
     const suffix = Date.now().toString();
     const keySku = input.sku.toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 80);
-    const body = {
+    const common = {
       key: `bff-${keySku}-${suffix}`.slice(0, 256),
       name: { 'en-CA': input.name, en: input.name },
       description: { 'en-CA': `Created from the BFF promotion dashboard for SKU ${input.sku}` },
+    };
+    if (input.discountType === 'bogo') {
+      const predicate = `sku = \"${input.sku}\"`;
+      const body = {
+        ...common,
+        key: `bff-bogo-${keySku}-${suffix}`.slice(0, 256),
+        description: { 'en-CA': `Buy ${input.buyQuantity} and get ${input.freeQuantity} free for SKU ${input.sku}` },
+        value: { type: 'relative', permyriad: 10000, applicationMode: 'IndividualApplication' },
+        cartPredicate: '1 = 1',
+        target: {
+          type: 'pattern',
+          triggerPattern: [{ type: 'CountOnLineItemUnits', predicate, minCount: input.buyQuantity, maxCount: input.buyQuantity }],
+          targetPattern: [{ type: 'CountOnLineItemUnits', predicate, minCount: input.freeQuantity, maxCount: input.freeQuantity }],
+          ...(input.repeat === false ? { maxOccurrence: 1 } : {}),
+          selectionMode: 'Cheapest',
+        },
+        sortOrder: `0.${suffix.slice(-12)}`,
+        isActive: true,
+        requiresDiscountCode: false,
+        stackingMode: 'Stacking',
+      };
+      const response = await this.commerce('/cart-discounts', { method: 'POST', body: JSON.stringify(body) });
+      if (!response.ok) throw new CommerceError(response.status === 400 ? 400 : 502, 'PromotionCreationFailed', await this.commerceErrorMessage(response, 'commercetools rejected the buy-and-get discount'));
+      const created = cartDiscount.parse(await response.json());
+      return { promotion: { id: created.id, resourceType: 'cart-discount', key: created.key, name: input.name, sku: input.sku, active: created.isActive } };
+    }
+    if (input.discountType === 'finalPrice') {
+      const body = {
+        ...common,
+        key: `bff-final-price-${keySku}-${suffix}`.slice(0, 256),
+        value: { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(discountAmount * 100), fractionDigits: 2 }], applicationMode: 'IndividualApplication' },
+        cartPredicate: '1 = 1',
+        target: { type: 'lineItems', predicate: `sku = \"${input.sku}\"` },
+        sortOrder: `0.${suffix.slice(-12)}`,
+        isActive: true,
+        requiresDiscountCode: false,
+        stackingMode: 'Stacking',
+      };
+      const response = await this.commerce('/cart-discounts', { method: 'POST', body: JSON.stringify(body) });
+      if (!response.ok) throw new CommerceError(response.status === 400 ? 400 : 502, 'PromotionCreationFailed', await this.commerceErrorMessage(response, 'commercetools rejected the final-price discount'));
+      const created = cartDiscount.parse(await response.json());
+      return { promotion: { id: created.id, resourceType: 'cart-discount', key: created.key, name: input.name, sku: input.sku, active: created.isActive } };
+    }
+    const body = {
+      ...common,
       value: percentage
-        ? { type: 'relative', permyriad: Math.round(input.discount * 100) }
-        : { type: 'absolute', money: [{ currencyCode: 'CAD', centAmount: Math.round(input.discount * 100) }] },
+        ? { type: 'relative', permyriad: Math.round(discountAmount * 100) }
+        : { type: 'absolute', money: [{ currencyCode: 'CAD', centAmount: Math.round(discountAmount * 100) }] },
       predicate: `sku = \"${input.sku}\"`,
       sortOrder: `0.${suffix.slice(-12)}`,
       isActive: true,
@@ -120,15 +200,23 @@ export class CommercetoolsPromotionClient implements PromotionService {
     return { promotion: { id: created.id, key: created.key, name: input.name, sku: input.sku, active: created.isActive } };
   }
 
-  async removePromotion(id: string) {
-    const currentResponse = await this.commerce(`/product-discounts/${encodeURIComponent(id)}`);
-    if (currentResponse.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Product discount was not found');
-    if (!currentResponse.ok) throw new CommerceError(502, 'PromotionReadFailed', 'Unable to read the product discount');
+  private async commerceErrorMessage(response: Response, fallback: string) {
+    try {
+      const error = z.object({ message: z.string().optional() }).parse(await response.json());
+      return error.message ?? fallback;
+    } catch { return fallback; }
+  }
+
+  async removePromotion(id: string, resourceType: 'product-discount' | 'cart-discount' = 'product-discount') {
+    const collection = resourceType === 'cart-discount' ? 'cart-discounts' : 'product-discounts';
+    const currentResponse = await this.commerce(`/${collection}/${encodeURIComponent(id)}`);
+    if (currentResponse.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Discount was not found');
+    if (!currentResponse.ok) throw new CommerceError(502, 'PromotionReadFailed', 'Unable to read the discount');
     const current = z.object({ id: z.string(), version: z.number().int().positive() }).parse(await currentResponse.json());
-    const response = await this.commerce(`/product-discounts/${encodeURIComponent(id)}?version=${current.version}`, { method: 'DELETE' });
-    if (response.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Product discount was not found');
-    if (response.status === 409) throw new CommerceError(409, 'PromotionChanged', 'Product discount changed; refresh and try again');
-    if (!response.ok) throw new CommerceError(502, 'PromotionRemovalFailed', 'Unable to remove the product discount');
+    const response = await this.commerce(`/${collection}/${encodeURIComponent(id)}?version=${current.version}`, { method: 'DELETE' });
+    if (response.status === 404) throw new CommerceError(404, 'PromotionNotFound', 'Discount was not found');
+    if (response.status === 409) throw new CommerceError(409, 'PromotionChanged', 'Discount changed; refresh and try again');
+    if (!response.ok) throw new CommerceError(502, 'PromotionRemovalFailed', 'Unable to remove the discount');
     return { removed: true, id };
   }
 

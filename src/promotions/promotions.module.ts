@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Header, Inject, Module, Param, Post, type DynamicModule } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Inject, Module, Param, Post, Query, type DynamicModule } from '@nestjs/common';
 import { z } from 'zod';
 import { CommerceError } from '../commercetools.js';
 import { createBundlePromotionInput, createPromotionInput, type PromotionService } from './promotions.js';
@@ -29,9 +29,11 @@ export class PromotionsController {
   }
 
   @Delete('api/promotions/:id')
-  remove(@Param('id') id: string) {
-    if (!z.uuid().safeParse(id).success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid product discount ID');
-    return this.promotions.removePromotion(id);
+  remove(@Param('id') id: string, @Query('resourceType') resourceType?: string) {
+    if (!z.uuid().safeParse(id).success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid discount ID');
+    const parsedType = z.enum(['product-discount', 'cart-discount']).optional().safeParse(resourceType);
+    if (!parsedType.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid discount resource type');
+    return this.promotions.removePromotion(id, parsedType.data);
   }
 
   @Get('api/bundle-promotions')

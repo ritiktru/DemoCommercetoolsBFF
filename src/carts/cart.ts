@@ -26,6 +26,7 @@ export const cartSchema = z.object({
         discountedAmount: money,
       })).default([]),
     }).optional(),
+    taxedPrice: z.object({ totalNet: money, totalGross: money }).optional(),
   }).optional(),
   taxedPrice: z.object({
     totalNet: money,
@@ -53,6 +54,7 @@ export const cartSchema = z.object({
         })).default([]),
       }),
     })).default([]),
+    taxedPrice: z.object({ totalNet: money, totalGross: money }).optional(),
     totalPrice: money,
   })),
   createdAt: z.string(), lastModifiedAt: z.string(),
