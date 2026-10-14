@@ -114,6 +114,80 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     });
   }
 
+  private async activeOffersBySku(): Promise<Map<string, Array<{ id: string; label: string }>>> {
+    const query = new URLSearchParams({ where: 'isActive=true', limit: '500' });
+    const [cartResponse, productResponse] = await Promise.all([
+      this.commerce(`/cart-discounts?${query}`),
+      this.commerce(`/product-discounts?${query}`),
+    ]);
+    const component = z.object({ predicate: z.string(), minCount: z.number().int().optional(), maxCount: z.number().int().optional() });
+    const target = z.discriminatedUnion('type', [
+      z.object({ type: z.literal('lineItems'), predicate: z.string() }),
+      z.object({ type: z.literal('pattern'), triggerPattern: z.array(component), targetPattern: z.array(component), maxOccurrence: z.number().int().optional() }),
+    ]);
+    const value = z.discriminatedUnion('type', [
+      z.object({ type: z.literal('relative'), permyriad: z.number().int() }),
+      z.object({ type: z.literal('absolute'), money: z.array(money) }),
+      z.object({ type: z.literal('fixed'), money: z.array(money) }),
+    ]);
+    const parsed = cartResponse.ok
+      ? z.object({ results: z.array(z.unknown()) }).safeParse(await cartResponse.json())
+      : undefined;
+    const supportedDiscount = z.object({
+      id: z.string(), key: z.string().optional(), requiresDiscountCode: z.boolean().optional(), target, value,
+    });
+    const offers = new Map<string, Array<{ id: string; label: string }>>();
+    const cad = (discount: z.infer<typeof value>) => discount.type === 'relative'
+      ? 0
+      : (discount.money.find(amount => amount.currencyCode === 'CAD')?.centAmount ?? 0) / 100;
+    const formatCad = (amount: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(amount);
+    const skus = (predicate: string) => [...predicate.matchAll(/"([^"]+)"/g)].map(match => match[1]).filter((sku): sku is string => Boolean(sku));
+    for (const rawDiscount of parsed?.success ? parsed.data.results : []) {
+      const supported = supportedDiscount.safeParse(rawDiscount);
+      if (!supported.success) continue;
+      const discount = supported.data;
+      if (!discount.key?.startsWith('bff-') || discount.requiresDiscountCode) continue;
+      let eligible: string[] = [];
+      let label = '';
+      if (discount.target.type === 'lineItems' && discount.key.startsWith('bff-final-price-') && discount.value.type === 'fixed') {
+        eligible = skus(discount.target.predicate);
+        label = `Special price ${formatCad(cad(discount.value))}`;
+      } else if (discount.target.type === 'pattern') {
+        const targetComponent = discount.target.targetPattern[0];
+        if (!targetComponent) continue;
+        eligible = skus(targetComponent.predicate);
+        const quantity = targetComponent.maxCount ?? targetComponent.minCount ?? 1;
+        if (discount.key.startsWith('bff-bogo-')) {
+          const trigger = discount.target.triggerPattern[0];
+          label = `Buy ${trigger?.maxCount ?? trigger?.minCount ?? 1}, get ${quantity} free`;
+        } else if (discount.key.startsWith('bff-bundle-') && discount.value.type === 'fixed') {
+          label = `${quantity} for ${formatCad(cad(discount.value))}`;
+        } else if (discount.key.startsWith('bff-bundle-') && discount.value.type === 'absolute') {
+          label = `Buy ${quantity}, save ${formatCad(cad(discount.value))}`;
+        } else if (discount.key.startsWith('bff-bundle-') && discount.value.type === 'relative') {
+          label = `Buy ${quantity}, save ${discount.value.permyriad / 100}%`;
+        }
+      }
+      if (!label) continue;
+      for (const sku of eligible) offers.set(sku, [...(offers.get(sku) ?? []), { id: discount.id, label }]);
+    }
+    if (productResponse.ok) {
+      const productDiscount = z.object({ id: z.string(), key: z.string().optional(), predicate: z.string(), value });
+      const productResult = z.object({ results: z.array(z.unknown()) }).safeParse(await productResponse.json());
+      for (const rawDiscount of productResult.success ? productResult.data.results : []) {
+        const supported = productDiscount.safeParse(rawDiscount);
+        if (!supported.success || !supported.data.key?.startsWith('bff-')) continue;
+        const discount = supported.data;
+        const label = discount.value.type === 'relative'
+          ? `${discount.value.permyriad / 100}% off`
+          : discount.value.type === 'absolute' ? `Save ${formatCad(cad(discount.value))}` : '';
+        if (!label) continue;
+        for (const sku of skus(discount.predicate)) offers.set(sku, [...(offers.get(sku) ?? []), { id: discount.id, label }]);
+      }
+    }
+    return offers;
+  }
+
   async getOntarioTaxRate(): Promise<number> {
     const response = await this.commerce('/tax-categories?limit=100');
     if (!response.ok) return 0.13;
@@ -134,9 +208,10 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   }
 
   async listStoreProducts(storeKey: string) {
-    const [assignments, channelResponse] = await Promise.all([
+    const [assignments, channelResponse, offersBySku] = await Promise.all([
       this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-selection-assignments?limit=10`),
       this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
+      this.activeOffersBySku(),
     ]);
     if (!assignments.ok || !channelResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store assortment');
     const channelId = z.object({ id: z.string() }).parse(await channelResponse.json()).id;
@@ -147,15 +222,16 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store product');
       const raw = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string().optional(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }).optional(), attributes: z.array(z.object({ name: z.string(), value: z.unknown() })) }) }).parse(await response.json());
       const attributes = Object.fromEntries(raw.masterVariant.attributes.map(attribute => [attribute.name, attribute.value]));
-      return { id: raw.id, key: raw.key, name: raw.name['en-CA'] ?? raw.name['en-US'] ?? Object.values(raw.name)[0], sku: raw.masterVariant.sku, brand: attributes['pace-brand'], price: raw.masterVariant.price?.value };
+      return { id: raw.id, key: raw.key, name: raw.name['en-CA'] ?? raw.name['en-US'] ?? Object.values(raw.name)[0], sku: raw.masterVariant.sku, brand: attributes['pace-brand'], price: raw.masterVariant.price?.value, offers: raw.masterVariant.sku ? offersBySku.get(raw.masterVariant.sku) ?? [] : [] };
     }));
     return { storeKey, products };
   }
 
   async searchStoreProducts(storeKey: string, query: string, limit = 24, offset = 0) {
-    const [channelResponse, storeResponse] = await Promise.all([
+    const [channelResponse, storeResponse, offersBySku] = await Promise.all([
       this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
       this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`),
+      this.activeOffersBySku(),
     ]);
     if (!channelResponse.ok || !storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store references');
     const channelId = z.object({ id: z.string() }).parse(await channelResponse.json()).id;
@@ -171,7 +247,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       if (!projection.ok) return undefined;
       const item = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string().optional(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }).optional(), attributes: z.array(z.object({ name: z.string(), value: z.unknown() })) }) }).parse(await projection.json());
       const attributes = Object.fromEntries(item.masterVariant.attributes.map(attribute => [attribute.name, attribute.value]));
-      return { id: item.id, key: item.key, name: item.name['en-CA'] ?? item.name['en-US'] ?? Object.values(item.name)[0], sku: item.masterVariant.sku, brand: attributes['pace-brand'], price: item.masterVariant.price?.value };
+      return { id: item.id, key: item.key, name: item.name['en-CA'] ?? item.name['en-US'] ?? Object.values(item.name)[0], sku: item.masterVariant.sku, brand: attributes['pace-brand'], price: item.masterVariant.price?.value, offers: item.masterVariant.sku ? offersBySku.get(item.masterVariant.sku) ?? [] : [] };
     }));
     return { storeKey, query, limit, offset, total: raw.total, products: products.filter(Boolean) };
   }

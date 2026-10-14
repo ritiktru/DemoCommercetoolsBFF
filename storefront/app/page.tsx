@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 
 type Store = { key: string; name: string };
 type Money = { currencyCode: string; centAmount: number };
-type Product = { id: string; name?: string; sku?: string; brand?: unknown; price?: Money };
+type Product = { id: string; name?: string; sku?: string; brand?: unknown; price?: Money; offers?: Array<{ id: string; label: string }> };
 type DeliveryPass = { product: { name: string; sku: string; price: Money } };
 type Cart = {
   id: string;
@@ -702,6 +702,7 @@ export default function Home() {
                 <span className="brand">{String(product.brand ?? 'Grocery')}</span>
                 <h3>{product.name}</h3>
                 <p className="sku">SKU {product.sku}</p>
+                {product.offers?.map(offer => <div className="offerBadge" key={offer.id}>{offer.label}</div>)}
                 <div className="productFooter">
                   <strong>{money(product.price)}</strong>
                   {lineFor(product) ? (

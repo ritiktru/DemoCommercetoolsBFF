@@ -23,7 +23,7 @@ export const createBundlePromotionInput = z.strictObject({
   skus: z.array(z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9._-]+$/)).min(1).max(100)
     .transform(skus => [...new Set(skus)]),
   name: z.string().trim().min(1).max(120),
-  promotionType: z.enum(['fixedBundlePrice', 'percentageOff']),
+  promotionType: z.enum(['fixedBundlePrice', 'percentageOff', 'amountOff']),
   quantity: z.number().int().min(2).max(100),
   discount: z.number().positive().max(100000),
   repeat: z.boolean().default(true),

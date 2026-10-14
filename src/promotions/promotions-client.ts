@@ -231,7 +231,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
       active: discount.isActive,
       discount: discount.value.type === 'relative'
         ? { type: 'percentage', value: discount.value.permyriad / 100 }
-        : { type: 'fixedBundlePrice', value: (discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount ?? 0) / 100 },
+        : { type: discount.value.type === 'absolute' ? 'amountOff' : 'fixedBundlePrice', value: (discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount ?? 0) / 100 },
       target: discount.target,
       createdAt: discount.createdAt,
     })) };
@@ -263,7 +263,9 @@ export class CommercetoolsPromotionClient implements PromotionService {
       description: { 'en-CA': `${input.quantity} qualifying items from ${input.skus.length} SKUs` },
       value: input.promotionType === 'percentageOff'
         ? { type: 'relative', permyriad: Math.round(input.discount * 100), applicationMode: 'IndividualApplication' }
-        : { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'EvenDistribution' },
+        : input.promotionType === 'amountOff'
+          ? { type: 'absolute', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'EvenDistribution' }
+          : { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'EvenDistribution' },
       cartPredicate: '1 = 1',
       target: {
         type: 'pattern', triggerPattern: [],
