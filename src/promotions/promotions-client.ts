@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import { CommerceError } from '../commercetools.js';
-import type { CreateBundlePromotionInput, CreatePromotionInput, PromotionService } from './promotions.js';
+import type { CreateBundlePromotionInput, CreateCustomerGroupPromotionInput, CreatePromotionInput, PromotionService } from './promotions.js';
 
 const localizedString = z.record(z.string(), z.string());
 const money = z.object({ currencyCode: z.string(), centAmount: z.number().int() });
@@ -31,6 +31,8 @@ const patternTarget = z.object({
   maxOccurrence: z.number().int().optional(),
   selectionMode: z.string(),
 });
+const customerGroupCartPredicate = (customerGroupId: string) =>
+  `(customer.customerGroup.id = \"${customerGroupId}\" or customer.customerGroupAssignments.customerGroup.id contains \"${customerGroupId}\")`;
 
 export class CommercetoolsPromotionClient implements PromotionService {
   private token?: { value: string; expiresAt: number };
@@ -82,7 +84,8 @@ export class CommercetoolsPromotionClient implements PromotionService {
     const cartResult = z.object({ results: z.array(cartDiscount) }).parse(await cartResponse.json());
     const singleProductCartPromotions = cartResult.results.filter(discount =>
       (discount.key?.startsWith('bff-final-price-') && discount.target.type === 'lineItems' && discount.value.type === 'fixed') ||
-      (discount.key?.startsWith('bff-bogo-') && discount.target.type === 'pattern' && discount.value.type === 'relative'));
+      (discount.key?.startsWith('bff-bogo-') && discount.target.type === 'pattern' && discount.value.type === 'relative') ||
+      (discount.key?.startsWith('bff-product-group-') && discount.target.type === 'lineItems'));
     return {
       promotions: [...result.results.map(discount => ({
         id: discount.id,
@@ -97,6 +100,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
         createdAt: discount.createdAt,
       })), ...singleProductCartPromotions.map(discount => {
         const bogo = discount.key?.startsWith('bff-bogo-');
+        const groupProduct = discount.key?.startsWith('bff-product-group-');
         const target = bogo ? patternTarget.safeParse(discount.target) : undefined;
         const trigger = target?.success ? target.data.triggerPattern[0] : undefined;
         const reward = target?.success ? target.data.targetPattern[0] : undefined;
@@ -107,11 +111,16 @@ export class CommercetoolsPromotionClient implements PromotionService {
         name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
         predicate: bogo ? (trigger?.predicate ?? '') : ('predicate' in discount.target && typeof discount.target.predicate === 'string' ? discount.target.predicate : ''),
         active: discount.isActive,
+        customerGroupId: discount.cartPredicate.match(/contains\s+\"([^\"]+)\"/)?.[1],
         discount: bogo
           ? { type: 'bogo', value: 100, buyQuantity: trigger?.maxCount ?? trigger?.minCount ?? 1, freeQuantity: reward?.maxCount ?? reward?.minCount ?? 1, repeat: !target?.success || target.data.maxOccurrence === undefined }
-          : { type: 'finalPrice', value: (discount.value.type === 'fixed' ? discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount : 0) ?? 0 },
+          : groupProduct
+            ? discount.value.type === 'relative'
+              ? { type: 'percentage', value: discount.value.permyriad / 100 }
+              : { type: 'fixed', value: (discount.value.type === 'absolute' ? discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount : 0) ?? 0 }
+            : { type: 'finalPrice', value: (discount.value.type === 'fixed' ? discount.value.money.find(value => value.currencyCode === 'CAD')?.centAmount : 0) ?? 0 },
         createdAt: discount.createdAt,
-      }; }).map(discount => discount.discount.type === 'finalPrice'
+      }; }).map(discount => discount.discount.type === 'finalPrice' || (discount.key?.startsWith('bff-product-group-') && discount.discount.type === 'fixed')
         ? { ...discount, discount: { ...discount.discount, value: discount.discount.value / 100 } }
         : discount)]
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
@@ -131,6 +140,10 @@ export class CommercetoolsPromotionClient implements PromotionService {
     if (percentage && discountAmount > 100) throw new CommerceError(400, 'InvalidDiscount', 'Percentage discount cannot exceed 100');
     const suffix = Date.now().toString();
     const keySku = input.sku.toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 80);
+    if (input.customerGroupId) await this.verifyCustomerGroup(input.customerGroupId);
+    const cartPredicate = input.customerGroupId
+      ? customerGroupCartPredicate(input.customerGroupId)
+      : '1 = 1';
     const common = {
       key: `bff-${keySku}-${suffix}`.slice(0, 256),
       name: { 'en-CA': input.name, en: input.name },
@@ -143,7 +156,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
         key: `bff-bogo-${keySku}-${suffix}`.slice(0, 256),
         description: { 'en-CA': `Buy ${input.buyQuantity} and get ${input.freeQuantity} free for SKU ${input.sku}` },
         value: { type: 'relative', permyriad: 10000, applicationMode: 'IndividualApplication' },
-        cartPredicate: '1 = 1',
+        cartPredicate,
         target: {
           type: 'pattern',
           triggerPattern: [{ type: 'CountOnLineItemUnits', predicate, minCount: input.buyQuantity, maxCount: input.buyQuantity }],
@@ -166,7 +179,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
         ...common,
         key: `bff-final-price-${keySku}-${suffix}`.slice(0, 256),
         value: { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(discountAmount * 100), fractionDigits: 2 }], applicationMode: 'IndividualApplication' },
-        cartPredicate: '1 = 1',
+        cartPredicate,
         target: { type: 'lineItems', predicate: `sku = \"${input.sku}\"` },
         sortOrder: `0.${suffix.slice(-12)}`,
         isActive: true,
@@ -187,6 +200,23 @@ export class CommercetoolsPromotionClient implements PromotionService {
       sortOrder: `0.${suffix.slice(-12)}`,
       isActive: true,
     };
+    if (input.customerGroupId) {
+      const cartBody = {
+        ...common,
+        key: `bff-product-group-${keySku}-${suffix}`.slice(0, 256),
+        value: percentage
+          ? { type: 'relative', permyriad: Math.round(discountAmount * 100), applicationMode: 'IndividualApplication' }
+          : { type: 'absolute', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(discountAmount * 100), fractionDigits: 2 }], applicationMode: 'IndividualApplication' },
+        cartPredicate,
+        target: { type: 'lineItems', predicate: `sku = \"${input.sku}\"` },
+        sortOrder: `0.${suffix.slice(-12)}`,
+        isActive: true, requiresDiscountCode: false, stackingMode: 'Stacking',
+      };
+      const response = await this.commerce('/cart-discounts', { method: 'POST', body: JSON.stringify(cartBody) });
+      if (!response.ok) throw new CommerceError(response.status === 400 ? 400 : 502, 'PromotionCreationFailed', await this.commerceErrorMessage(response, 'commercetools rejected the customer-group product discount'));
+      const created = cartDiscount.parse(await response.json());
+      return { promotion: { id: created.id, resourceType: 'cart-discount', key: created.key, name: input.name, sku: input.sku, active: created.isActive } };
+    }
     const response = await this.commerce('/product-discounts', { method: 'POST', body: JSON.stringify(body) });
     if (!response.ok) {
       let message = 'commercetools rejected the product discount';
@@ -205,6 +235,60 @@ export class CommercetoolsPromotionClient implements PromotionService {
       const error = z.object({ message: z.string().optional() }).parse(await response.json());
       return error.message ?? fallback;
     } catch { return fallback; }
+  }
+
+  async listCustomerGroups() {
+    const response = await this.commerce('/customer-groups?sort=name%20asc&limit=500');
+    if (!response.ok) throw new CommerceError(502, 'CustomerGroupListFailed', 'Unable to load customer groups');
+    const result = z.object({ results: z.array(z.object({ id: z.string(), key: z.string().optional(), name: z.string() })) }).parse(await response.json());
+    return { groups: result.results };
+  }
+
+  private async verifyCustomerGroup(customerGroupId: string) {
+    const response = await this.commerce(`/customer-groups/${encodeURIComponent(customerGroupId)}`);
+    if (response.status === 404) throw new CommerceError(404, 'CustomerGroupNotFound', 'Customer group was not found');
+    if (!response.ok) throw new CommerceError(502, 'CustomerGroupLookupFailed', 'Unable to verify the customer group');
+  }
+
+  async listCustomerGroupPromotions() {
+    const response = await this.commerce('/cart-discounts?sort=createdAt%20desc&limit=500');
+    if (!response.ok) throw new CommerceError(502, 'PromotionListFailed', 'Unable to load customer group promotions');
+    const result = z.object({ results: z.array(cartDiscount) }).parse(await response.json());
+    return { promotions: result.results.filter(discount => discount.key?.startsWith('bff-customer-group-')).map(discount => ({
+      id: discount.id, key: discount.key,
+      name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
+      customerGroupId: discount.cartPredicate.match(/contains\s+\"([^\"]+)\"/)?.[1],
+      active: discount.isActive,
+      discount: discount.value.type === 'relative'
+        ? { type: 'percentage', value: discount.value.permyriad / 100 }
+        : { type: 'fixed', value: (discount.value.money.find(amount => amount.currencyCode === 'CAD')?.centAmount ?? 0) / 100 },
+      createdAt: discount.createdAt,
+    })) };
+  }
+
+  async createCustomerGroupPromotion(input: CreateCustomerGroupPromotionInput) {
+    const groupResponse = await this.commerce(`/customer-groups/${encodeURIComponent(input.customerGroupId)}`);
+    if (groupResponse.status === 404) throw new CommerceError(404, 'CustomerGroupNotFound', 'Customer group was not found');
+    if (!groupResponse.ok) throw new CommerceError(502, 'CustomerGroupLookupFailed', 'Unable to verify the customer group');
+    const group = z.object({ id: z.string(), name: z.string() }).parse(await groupResponse.json());
+    if (input.discountType === 'percentage' && input.discount > 100) throw new CommerceError(400, 'InvalidDiscount', 'Percentage discount cannot exceed 100');
+    const suffix = Date.now().toString();
+    const body = {
+      key: `bff-customer-group-${input.customerGroupId}-${suffix}`.slice(0, 256),
+      name: { 'en-CA': input.name, en: input.name },
+      description: { 'en-CA': `${input.discount}${input.discountType === 'percentage' ? '%' : ' CAD'} off all products for ${group.name}` },
+      value: input.discountType === 'percentage'
+        ? { type: 'relative', permyriad: Math.round(input.discount * 100) }
+        : { type: 'absolute', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'IndividualApplication' },
+      cartPredicate: customerGroupCartPredicate(input.customerGroupId),
+      target: { type: 'lineItems', predicate: 'true' },
+      sortOrder: `0.${suffix.slice(-12)}`,
+      isActive: true, requiresDiscountCode: false, stackingMode: 'Stacking',
+    };
+    const response = await this.commerce('/cart-discounts', { method: 'POST', body: JSON.stringify(body) });
+    if (!response.ok) throw new CommerceError(response.status === 400 ? 400 : 502, 'PromotionCreationFailed', await this.commerceErrorMessage(response, 'commercetools rejected the customer group promotion'));
+    const created = cartDiscount.parse(await response.json());
+    return { promotion: { id: created.id, key: created.key, name: input.name, customerGroupId: input.customerGroupId, active: created.isActive } };
   }
 
   async removePromotion(id: string, resourceType: 'product-discount' | 'cart-discount' = 'product-discount') {
@@ -228,6 +312,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
       id: discount.id,
       key: discount.key,
       name: discount.name['en-CA'] ?? discount.name.en ?? Object.values(discount.name)[0] ?? discount.id,
+      customerGroupId: discount.cartPredicate.match(/contains\s+\"([^\"]+)\"/)?.[1],
       active: discount.isActive,
       discount: discount.value.type === 'relative'
         ? { type: 'percentage', value: discount.value.permyriad / 100 }
@@ -252,6 +337,7 @@ export class CommercetoolsPromotionClient implements PromotionService {
 
   async createBundlePromotion(input: CreateBundlePromotionInput) {
     await this.verifySkus(input.skus);
+    if (input.customerGroupId) await this.verifyCustomerGroup(input.customerGroupId);
     if (input.promotionType === 'percentageOff' && input.discount > 100) {
       throw new CommerceError(400, 'InvalidDiscount', 'Percentage discount cannot exceed 100');
     }
@@ -266,7 +352,9 @@ export class CommercetoolsPromotionClient implements PromotionService {
         : input.promotionType === 'amountOff'
           ? { type: 'absolute', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'EvenDistribution' }
           : { type: 'fixed', money: [{ type: 'centPrecision', currencyCode: 'CAD', centAmount: Math.round(input.discount * 100), fractionDigits: 2 }], applicationMode: 'EvenDistribution' },
-      cartPredicate: '1 = 1',
+      cartPredicate: input.customerGroupId
+        ? customerGroupCartPredicate(input.customerGroupId)
+        : '1 = 1',
       target: {
         type: 'pattern', triggerPattern: [],
         targetPattern: [{ type: 'CountOnLineItemUnits', predicate, minCount: input.quantity, maxCount: input.quantity }],

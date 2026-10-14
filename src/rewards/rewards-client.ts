@@ -110,13 +110,18 @@ export class CommercetoolsRewardClient implements RewardService {
     const { rules } = await this.listRules() as { rules: Array<RewardRuleInput> };
     const { points, awardedRules } = calculateRewardPoints(rules, order.lineItems.map(item => ({ sku: item.variant.sku, quantity: item.quantity })));
 
-    const customerResponse = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`);
+    const [customerResponse, typeResponse] = await Promise.all([
+      this.commerce(`/customers/${encodeURIComponent(customer.id)}`),
+      this.commerce(`/types/key=${encodeURIComponent(this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY)}`),
+    ]);
     if (!customerResponse.ok) return this.error(customerResponse, 'Unable to read customer rewards');
-    const current = z.object({ version: z.number().int().positive(), custom: z.object({ type: z.object({ key: z.string().optional() }).optional(), fields: z.record(z.string(), z.unknown()) }).optional() }).parse(await customerResponse.json());
+    if (!typeResponse.ok) return this.error(typeResponse, 'Unable to read customer rewards type');
+    const current = z.object({ version: z.number().int().positive(), custom: z.object({ type: z.object({ id: z.string() }), fields: z.record(z.string(), z.unknown()) }).optional() }).parse(await customerResponse.json());
+    const customType = z.object({ id: z.string() }).parse(await typeResponse.json());
     const oldBalance = typeof current.custom?.fields.rewardPointsBalance === 'number' ? current.custom.fields.rewardPointsBalance : 0;
     const balance = oldBalance + points;
     if (points === 0) return { alreadyAwarded: false, orderId, points, balance, awardedRules };
-    const action = current.custom?.type?.key === this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY
+    const action = current.custom?.type.id === customType.id
       ? { action: 'setCustomField', name: 'rewardPointsBalance', value: balance }
       : { action: 'setCustomType', type: { typeId: 'type', key: this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY }, fields: { rewardPointsBalance: balance } };
     const updated = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`, { method: 'POST', body: JSON.stringify({ version: current.version, actions: [action] }) });

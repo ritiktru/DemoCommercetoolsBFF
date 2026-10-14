@@ -44,8 +44,8 @@ export type CheckoutAddressInput = z.infer<typeof checkoutAddressInput>;
 export type BillingAddressInput = z.infer<typeof billingAddressInput>;
 export interface StorefrontService {
   listStores(): Promise<unknown>;
-  listStoreProducts(storeKey: string): Promise<unknown>;
-  searchStoreProducts(storeKey: string, query: string, limit?: number, offset?: number): Promise<unknown>;
+  listStoreProducts(storeKey: string, customer?: SessionCustomer): Promise<unknown>;
+  searchStoreProducts(storeKey: string, query: string, limit?: number, offset?: number, customer?: SessionCustomer): Promise<unknown>;
   createStoreCart(storeKey: string, customer?: SessionCustomer): Promise<unknown>;
   addStoreCartItem(storeKey: string, input: AddItemInput, customer?: SessionCustomer): Promise<unknown>;
   updateStoreCartItem(storeKey: string, input: UpdateItemInput, customer?: SessionCustomer): Promise<unknown>;

@@ -25,6 +25,22 @@ test('store product cards include active dashboard promotion labels matched by S
           targetPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku in ("680705-EA")', minCount: 2, maxCount: 2 }],
         },
       },
+      {
+        id: 'loyalty-discount', key: 'bff-customer-group-group-1-123', requiresDiscountCode: false,
+        cartPredicate: 'customer.customerGroupAssignments.customerGroup.id contains "group-1"',
+        value: { type: 'relative', permyriad: 500 }, target: { type: 'lineItems', predicate: 'true' },
+      },
+      {
+        id: 'group-product-discount', key: 'bff-product-group-680705-ea-123', requiresDiscountCode: false,
+        cartPredicate: 'customer.customerGroupAssignments.customerGroup.id contains "group-1"',
+        value: { type: 'relative', permyriad: 1000 }, target: { type: 'lineItems', predicate: 'sku = "680705-EA"' },
+      },
+      {
+        id: 'group-bundle-discount', key: 'bff-bundle-456', requiresDiscountCode: false,
+        cartPredicate: 'customer.customerGroupAssignments.customerGroup.id contains "group-1"',
+        value: { type: 'fixed', money: [{ currencyCode: 'CAD', centAmount: 500 }] },
+        target: { type: 'pattern', triggerPattern: [], targetPattern: [{ type: 'CountOnLineItemUnits', predicate: 'sku in ("680705-EA")', minCount: 2, maxCount: 2 }] },
+      },
     ] });
     if (url.includes('/product-discounts?')) return Response.json({ results: [{
       id: 'percentage-discount', key: 'bff-680705-ea-456', predicate: 'sku = "680705-EA"',
@@ -36,12 +52,22 @@ test('store product cards include active dashboard promotion labels matched by S
         sku: '680705-EA', price: { value: { currencyCode: 'CAD', centAmount: 1599 } }, attributes: [],
       },
     });
+    if (url.endsWith('/customers/customer-1')) return Response.json({
+      customerGroupAssignments: [{ customerGroup: { id: 'group-1' } }],
+    });
     throw new Error(`Unexpected request: ${url}`);
   };
   const client = new CommercetoolsClient(config, fetcher as typeof fetch);
-  const result: any = await client.listStoreProducts('sobeys-0870');
+  const result: any = await client.listStoreProducts('sobeys-0870', { id: 'customer-1', email: 'loyalty@example.com' });
   assert.deepEqual(result.products[0].offers, [
+    { id: 'loyalty-discount', label: 'Loyalty offer: 5% off' },
     { id: 'bundle-discount', label: 'Buy 2, save $5.00' },
+    { id: 'group-product-discount', label: '10% off' },
+    { id: 'group-bundle-discount', label: '2 for $5.00' },
     { id: 'percentage-discount', label: '15% off' },
   ]);
+  const anonymous: any = await client.listStoreProducts('sobeys-0870');
+  assert.equal(anonymous.products[0].offers.some((offer: { id: string }) => offer.id === 'loyalty-discount'), false);
+  assert.equal(anonymous.products[0].offers.some((offer: { id: string }) => offer.id === 'group-product-discount'), false);
+  assert.equal(anonymous.products[0].offers.some((offer: { id: string }) => offer.id === 'group-bundle-discount'), false);
 });

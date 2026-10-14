@@ -114,12 +114,24 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     });
   }
 
-  private async activeOffersBySku(): Promise<Map<string, Array<{ id: string; label: string }>>> {
+  private async activeOffersBySku(customer?: SessionCustomer): Promise<Map<string, Array<{ id: string; label: string }>>> {
     const query = new URLSearchParams({ where: 'isActive=true', limit: '500' });
-    const [cartResponse, productResponse] = await Promise.all([
+    const [cartResponse, productResponse, customerResponse] = await Promise.all([
       this.commerce(`/cart-discounts?${query}`),
       this.commerce(`/product-discounts?${query}`),
+      customer ? this.commerce(`/customers/${encodeURIComponent(customer.id)}`) : Promise.resolve(undefined),
     ]);
+    const customerGroups = new Set<string>();
+    if (customerResponse?.ok) {
+      const membership = z.object({
+        customerGroup: z.object({ id: z.string().optional() }).optional(),
+        customerGroupAssignments: z.array(z.object({ customerGroup: z.object({ id: z.string().optional() }) })).default([]),
+      }).safeParse(await customerResponse.json());
+      if (membership.success) {
+        if (membership.data.customerGroup?.id) customerGroups.add(membership.data.customerGroup.id);
+        for (const assignment of membership.data.customerGroupAssignments) if (assignment.customerGroup.id) customerGroups.add(assignment.customerGroup.id);
+      }
+    }
     const component = z.object({ predicate: z.string(), minCount: z.number().int().optional(), maxCount: z.number().int().optional() });
     const target = z.discriminatedUnion('type', [
       z.object({ type: z.literal('lineItems'), predicate: z.string() }),
@@ -134,7 +146,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       ? z.object({ results: z.array(z.unknown()) }).safeParse(await cartResponse.json())
       : undefined;
     const supportedDiscount = z.object({
-      id: z.string(), key: z.string().optional(), requiresDiscountCode: z.boolean().optional(), target, value,
+      id: z.string(), key: z.string().optional(), requiresDiscountCode: z.boolean().optional(), cartPredicate: z.string().optional(), target, value,
     });
     const offers = new Map<string, Array<{ id: string; label: string }>>();
     const cad = (discount: z.infer<typeof value>) => discount.type === 'relative'
@@ -147,11 +159,25 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       if (!supported.success) continue;
       const discount = supported.data;
       if (!discount.key?.startsWith('bff-') || discount.requiresDiscountCode) continue;
+      const restrictedGroupId = discount.cartPredicate?.match(/contains\s+\"([^\"]+)\"/)?.[1];
+      if (restrictedGroupId && !customerGroups.has(restrictedGroupId)) continue;
       let eligible: string[] = [];
       let label = '';
-      if (discount.target.type === 'lineItems' && discount.key.startsWith('bff-final-price-') && discount.value.type === 'fixed') {
+      if (discount.target.type === 'lineItems' && discount.key.startsWith('bff-customer-group-')) {
+        const groupId = discount.cartPredicate?.match(/contains\s+\"([^\"]+)\"/)?.[1];
+        if (!groupId || !customerGroups.has(groupId)) continue;
+        eligible = ['*'];
+        label = discount.value.type === 'relative'
+          ? `Loyalty offer: ${discount.value.permyriad / 100}% off`
+          : discount.value.type === 'absolute' ? `Loyalty offer: save ${formatCad(cad(discount.value))}` : '';
+      } else if (discount.target.type === 'lineItems' && discount.key.startsWith('bff-final-price-') && discount.value.type === 'fixed') {
         eligible = skus(discount.target.predicate);
         label = `Special price ${formatCad(cad(discount.value))}`;
+      } else if (discount.target.type === 'lineItems' && discount.key.startsWith('bff-product-group-')) {
+        eligible = skus(discount.target.predicate);
+        label = discount.value.type === 'relative'
+          ? `${discount.value.permyriad / 100}% off`
+          : discount.value.type === 'absolute' ? `Save ${formatCad(cad(discount.value))}` : '';
       } else if (discount.target.type === 'pattern') {
         const targetComponent = discount.target.targetPattern[0];
         if (!targetComponent) continue;
@@ -207,11 +233,11 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return { stores };
   }
 
-  async listStoreProducts(storeKey: string) {
+  async listStoreProducts(storeKey: string, customer?: SessionCustomer) {
     const [assignments, channelResponse, offersBySku] = await Promise.all([
       this.commerce(`/in-store/key=${encodeURIComponent(storeKey)}/product-selection-assignments?limit=10`),
       this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
-      this.activeOffersBySku(),
+      this.activeOffersBySku(customer),
     ]);
     if (!assignments.ok || !channelResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store assortment');
     const channelId = z.object({ id: z.string() }).parse(await channelResponse.json()).id;
@@ -222,16 +248,16 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       if (!response.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store product');
       const raw = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string().optional(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }).optional(), attributes: z.array(z.object({ name: z.string(), value: z.unknown() })) }) }).parse(await response.json());
       const attributes = Object.fromEntries(raw.masterVariant.attributes.map(attribute => [attribute.name, attribute.value]));
-      return { id: raw.id, key: raw.key, name: raw.name['en-CA'] ?? raw.name['en-US'] ?? Object.values(raw.name)[0], sku: raw.masterVariant.sku, brand: attributes['pace-brand'], price: raw.masterVariant.price?.value, offers: raw.masterVariant.sku ? offersBySku.get(raw.masterVariant.sku) ?? [] : [] };
+      return { id: raw.id, key: raw.key, name: raw.name['en-CA'] ?? raw.name['en-US'] ?? Object.values(raw.name)[0], sku: raw.masterVariant.sku, brand: attributes['pace-brand'], price: raw.masterVariant.price?.value, offers: [...(offersBySku.get('*') ?? []), ...(raw.masterVariant.sku ? offersBySku.get(raw.masterVariant.sku) ?? [] : [])] };
     }));
     return { storeKey, products };
   }
 
-  async searchStoreProducts(storeKey: string, query: string, limit = 24, offset = 0) {
+  async searchStoreProducts(storeKey: string, query: string, limit = 24, offset = 0, customer?: SessionCustomer) {
     const [channelResponse, storeResponse, offersBySku] = await Promise.all([
       this.commerce(`/channels/key=${encodeURIComponent(`${storeKey}-channel`)}`),
       this.commerce(`/stores/key=${encodeURIComponent(storeKey)}`),
-      this.activeOffersBySku(),
+      this.activeOffersBySku(customer),
     ]);
     if (!channelResponse.ok || !storeResponse.ok) throw new CommerceError(502, 'CommerceRequestFailed', 'Unable to load Store references');
     const channelId = z.object({ id: z.string() }).parse(await channelResponse.json()).id;
@@ -247,7 +273,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       if (!projection.ok) return undefined;
       const item = z.object({ id: z.string(), key: z.string().optional(), name: z.record(z.string(), z.string()), masterVariant: z.object({ sku: z.string().optional(), price: z.object({ value: z.object({ currencyCode: z.string(), centAmount: z.number(), fractionDigits: z.number().optional() }) }).optional(), attributes: z.array(z.object({ name: z.string(), value: z.unknown() })) }) }).parse(await projection.json());
       const attributes = Object.fromEntries(item.masterVariant.attributes.map(attribute => [attribute.name, attribute.value]));
-      return { id: item.id, key: item.key, name: item.name['en-CA'] ?? item.name['en-US'] ?? Object.values(item.name)[0], sku: item.masterVariant.sku, brand: attributes['pace-brand'], price: item.masterVariant.price?.value, offers: item.masterVariant.sku ? offersBySku.get(item.masterVariant.sku) ?? [] : [] };
+      return { id: item.id, key: item.key, name: item.name['en-CA'] ?? item.name['en-US'] ?? Object.values(item.name)[0], sku: item.masterVariant.sku, brand: attributes['pace-brand'], price: item.masterVariant.price?.value, offers: [...(offersBySku.get('*') ?? []), ...(item.masterVariant.sku ? offersBySku.get(item.masterVariant.sku) ?? [] : [])] };
     }));
     return { storeKey, query, limit, offset, total: raw.total, products: products.filter(Boolean) };
   }
@@ -550,13 +576,18 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     const belongsToCustomer = order.customerId === customer.id || (!order.customerId && order.customerEmail?.toLowerCase() === customer.email.toLowerCase());
     if (!belongsToCustomer) throw new CommerceError(404, 'OrderNotFound', 'Order not found');
     if (!order.lineItems.some(item => item.variant.sku === this.config.DELIVERY_PASS_SKU)) throw new CommerceError(400, 'DeliveryPassNotPurchased', 'This order does not contain a Delivery Pass');
-    const customerResponse = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`);
+    const [customerResponse, typeResponse] = await Promise.all([
+      this.commerce(`/customers/${encodeURIComponent(customer.id)}`),
+      this.commerce(`/types/key=${encodeURIComponent(this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY)}`),
+    ]);
     if (!customerResponse.ok) throw new CommerceError(404, 'CustomerNotFound', 'Customer not found');
-    const current = z.object({ version: z.number(), custom: z.object({ type: z.object({ key: z.string().optional() }).optional(), fields: z.record(z.string(), z.unknown()).default({}) }).optional() }).parse(await customerResponse.json());
+    if (!typeResponse.ok) throw new CommerceError(502, 'DeliveryPassTypeNotFound', 'Delivery Pass customer type was not found');
+    const current = z.object({ version: z.number(), custom: z.object({ type: z.object({ id: z.string() }), fields: z.record(z.string(), z.unknown()).default({}) }).optional() }).parse(await customerResponse.json());
+    const customType = z.object({ id: z.string() }).parse(await typeResponse.json());
     const expiresAt = new Date();
     expiresAt.setUTCMonth(expiresAt.getUTCMonth() + this.config.DELIVERY_PASS_DURATION_MONTHS);
     const fields = { deliveryPassActive: true, deliveryPassExpiresAt: expiresAt.toISOString(), deliveryPassOrderId: order.id };
-    const actions = current.custom?.type?.key === this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY
+    const actions = current.custom?.type.id === customType.id
       ? Object.entries(fields).map(([name, value]) => ({ action: 'setCustomField', name, value }))
       : [{ action: 'setCustomType', type: { typeId: 'type', key: this.config.DELIVERY_PASS_CUSTOM_TYPE_KEY }, fields }];
     const updated = await this.commerce(`/customers/${encodeURIComponent(customer.id)}`, { method: 'POST', body: JSON.stringify({ version: current.version, actions }) });

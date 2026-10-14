@@ -41,15 +41,15 @@ export class StorefrontController {
     if (!this.storefront.activateDeliveryPass) throw new CommerceError(503, 'DeliveryPassNotConfigured', 'Delivery Pass is not configured');
     return this.storefront.activateDeliveryPass(input.data.orderId, this.auth.customer(req));
   }
-  @Get('stores/:storeKey/products') products(@Param('storeKey') raw: string) {
+  @Get('stores/:storeKey/products') products(@Param('storeKey') raw: string, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw); if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
-    return this.storefront.listStoreProducts(key.data);
+    return this.storefront.listStoreProducts(key.data, this.optionalCustomer(req));
   }
   @Get('stores/:storeKey/products/search') searchProducts(@Param('storeKey') raw: string, @Req() req: Request) {
     const key = storeKeySchema.safeParse(raw); const input = productSearchInput.safeParse(req.query);
     if (!key.success) throw new CommerceError(404, 'StoreNotFound', 'Store not found');
     if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a search query');
-    return this.storefront.searchStoreProducts(key.data, input.data.q, input.data.limit, input.data.offset);
+    return this.storefront.searchStoreProducts(key.data, input.data.q, input.data.limit, input.data.offset, this.optionalCustomer(req));
   }
   @Post('stores/:storeKey/carts') @UseGuards(OriginGuard)
   createCart(@Param('storeKey') raw: string, @Req() req: Request) {

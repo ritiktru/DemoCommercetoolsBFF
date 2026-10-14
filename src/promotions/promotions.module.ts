@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Header, Inject, Module, Param, Post, Query, type DynamicModule } from '@nestjs/common';
 import { z } from 'zod';
 import { CommerceError } from '../commercetools.js';
-import { createBundlePromotionInput, createPromotionInput, type PromotionService } from './promotions.js';
+import { createBundlePromotionInput, createCustomerGroupPromotionInput, createPromotionInput, type PromotionService } from './promotions.js';
 import { promotionsPage, promotionsScript } from './promotions-page.js';
 
 const SERVICE = Symbol('PROMOTION_SERVICE');
@@ -34,6 +34,25 @@ export class PromotionsController {
     const parsedType = z.enum(['product-discount', 'cart-discount']).optional().safeParse(resourceType);
     if (!parsedType.success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid discount resource type');
     return this.promotions.removePromotion(id, parsedType.data);
+  }
+
+  @Get('api/customer-groups')
+  customerGroups() { return this.promotions.listCustomerGroups(); }
+
+  @Get('api/customer-group-promotions')
+  listCustomerGroupPromotions() { return this.promotions.listCustomerGroupPromotions(); }
+
+  @Post('api/customer-group-promotions')
+  createCustomerGroupPromotion(@Body() body: unknown) {
+    const input = createCustomerGroupPromotionInput.safeParse(body);
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide a customer group, name, discount type, and positive discount');
+    return this.promotions.createCustomerGroupPromotion(input.data);
+  }
+
+  @Delete('api/customer-group-promotions/:id')
+  removeCustomerGroupPromotion(@Param('id') id: string) {
+    if (!z.uuid().safeParse(id).success) throw new CommerceError(400, 'InvalidInput', 'Provide a valid cart discount ID');
+    return this.promotions.removePromotion(id, 'cart-discount');
   }
 
   @Get('api/bundle-promotions')

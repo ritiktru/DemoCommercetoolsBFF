@@ -239,6 +239,27 @@ test('promotion client creates buy two get five dollars off for one SKU', async 
   });
 });
 
+test('promotion client creates five percent off all products for a customer group', async () => {
+  const groupId = 'f69eba03-187b-4292-b92f-4f6df88f2bb9';
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.endsWith(`/customer-groups/${groupId}`)) return Response.json({ id: groupId, name: 'Loyalty User' });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({ id: 'loyalty-discount', key: draft.key, name: draft.name, value: draft.value, cartPredicate: draft.cartPredicate, target: draft.target, isActive: true, createdAt: '2026-10-14T00:00:00.000Z' }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  await client.createCustomerGroupPromotion({ customerGroupId: groupId, name: 'Loyalty users receive 5% off', discountType: 'percentage', discount: 5 });
+  assert.deepEqual(draft.value, { type: 'relative', permyriad: 500 });
+  assert.equal(draft.cartPredicate, `(customer.customerGroup.id = "${groupId}" or customer.customerGroupAssignments.customerGroup.id contains "${groupId}")`);
+  assert.deepEqual(draft.target, { type: 'lineItems', predicate: 'true' });
+  assert.equal(draft.requiresDiscountCode, false);
+});
+
 test('promotion client creates a one-time percentage bundle promotion', async () => {
   let draft: any;
   const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
@@ -269,4 +290,46 @@ test('promotion client reports all missing eligible SKUs before creating a bundl
     client.createBundlePromotion({ skus: ['SKU-A', 'MISSING'], name: 'Bundle', promotionType: 'fixedBundlePrice', quantity: 2, discount: 10, repeat: true }),
     (error: unknown) => error instanceof Error && error.message.includes('MISSING'),
   );
+});
+
+test('promotion client restricts a percentage product offer to a customer group', async () => {
+  const groupId = 'f69eba03-187b-4292-b92f-4f6df88f2bb9';
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith(`/customer-groups/${groupId}`)) return Response.json({ id: groupId, name: 'Loyalty User' });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({ id: 'group-product-id', key: draft.key, name: draft.name, value: draft.value, cartPredicate: draft.cartPredicate, target: draft.target, isActive: true, createdAt: '2026-10-14T00:00:00.000Z' }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  const result = await client.createPromotion({ sku: '680705-EA', name: 'Loyalty Huggies', discountType: 'percentage', discount: 5, customerGroupId: groupId });
+  assert.equal(result.promotion.resourceType, 'cart-discount');
+  assert.match(draft.key, /^bff-product-group-/);
+  assert.equal(draft.cartPredicate, `(customer.customerGroup.id = "${groupId}" or customer.customerGroupAssignments.customerGroup.id contains "${groupId}")`);
+  assert.deepEqual(draft.target, { type: 'lineItems', predicate: 'sku = "680705-EA"' });
+  assert.deepEqual(draft.value, { type: 'relative', permyriad: 500, applicationMode: 'IndividualApplication' });
+});
+
+test('promotion client restricts a bundle offer to a customer group', async () => {
+  const groupId = 'f69eba03-187b-4292-b92f-4f6df88f2bb9';
+  let draft: any;
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/oauth/token')) return Response.json({ access_token: 'token', expires_in: 3600 });
+    if (url.includes('/product-projections?')) return Response.json({ total: 1 });
+    if (url.endsWith(`/customer-groups/${groupId}`)) return Response.json({ id: groupId, name: 'Loyalty User' });
+    if (url.endsWith('/cart-discounts') && init?.method === 'POST') {
+      draft = JSON.parse(String(init.body));
+      return Response.json({ id: 'group-bundle-id', key: draft.key, name: draft.name, value: draft.value, cartPredicate: draft.cartPredicate, target: draft.target, isActive: true, createdAt: '2026-10-14T00:00:00.000Z' }, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const client = new CommercetoolsPromotionClient(config, fetcher as typeof fetch);
+  await client.createBundlePromotion({ skus: ['680705-EA'], name: 'Loyalty 2 for $5', promotionType: 'fixedBundlePrice', quantity: 2, discount: 5, repeat: true, customerGroupId: groupId });
+  assert.equal(draft.cartPredicate, `(customer.customerGroup.id = "${groupId}" or customer.customerGroupAssignments.customerGroup.id contains "${groupId}")`);
 });

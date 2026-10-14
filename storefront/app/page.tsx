@@ -166,7 +166,7 @@ export default function Home() {
         setStatus(`${data.products.length} products available`);
       })
       .catch(error => setStatus(error.message));
-  }, [storeKey]);
+  }, [storeKey, customer?.email]);
 
   useEffect(() => {
     if (!storeKey || !search.trim()) return;
@@ -180,7 +180,7 @@ export default function Home() {
         .catch(error => setStatus(error.message));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [storeKey, search]);
+  }, [storeKey, search, customer?.email]);
 
   async function signIn() {
     try {
