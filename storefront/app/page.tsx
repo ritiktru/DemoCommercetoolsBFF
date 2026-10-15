@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useState, type FormEvent } from 'react';
+import Image from 'next/image';
+import SobeysLogo from './sobeys-logo.svg';
 
 type Store = { key: string; name: string };
 type Money = { currencyCode: string; centAmount: number };
@@ -643,370 +645,394 @@ export default function Home() {
 
   return (
     <main>
-      <header>
-        <div>
+      <header className='header topHeader'>
+          <div className='container'>
+            <div className='headerLogo'>
+             <Image src={SobeysLogo}alt="Sobeys logo"width={150}height={75}/>
+            </div>
+            <div className="account">
+              {customer ? (
+                <>
+                  <span>Signed in</span>
+                  <strong>{customer.email}</strong>
+                  <span>{rewardBalance} reward points</span>
+                </>
+              ) : (
+                <>
+                  <button onClick={signIn}>Sign in with Google</button>
+                  <div id="google-signin" />
+                </>
+              )}
+            </div>
+          </div>
+ 
+      </header>
+      <div className='container'>
+         <div className='commrInfo'>
           <span className="eyebrow">COMMERCE POC</span>
           <h1>Fresh picks by store</h1>
           <p>Select a Sobeys location to test Store-scoped assortments, Channel prices, and carts.</p>
         </div>
-        <div className="account">
-          {customer ? (
-            <>
-              <span>Signed in</span>
-              <strong>{customer.email}</strong>
-              <span>{rewardBalance} reward points</span>
-            </>
-          ) : (
-            <>
-              <button onClick={signIn}>Sign in with Google</button>
-              <div id="google-signin" />
-            </>
-          )}
+        <div className='toolbarDeliveryPassSec d-flex'>
+         <div className="toolbar">
+          <label>
+            Shopping at
+            </label>
+            <div className='d-flex md-justify-sapce-between sm-flex-direction-column' >
+            <select value={storeKey} onChange={event => setStoreKey(event.target.value)}>
+              {stores.map(store => (
+                <option key={store.key} value={store.key}>
+                  {store.name} ({store.key.replace('sobeys-', '')})
+                </option>
+              ))}
+            </select>
+             <input aria-label="Search products" placeholder="Search products…" value={search} onChange={event => setSearch(event.target.value)} className='searchProductInput'/>
+           
+          </div>
+
+          <div className="status" role="status">
+            {status}
+          </div>
+           
         </div>
-      </header>
-      <section className="toolbar">
-        <label>
-          Shopping at
-          <select value={storeKey} onChange={event => setStoreKey(event.target.value)}>
-            {stores.map(store => (
-              <option key={store.key} value={store.key}>
-                {store.name} ({store.key.replace('sobeys-', '')})
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="status" role="status">
-          {status}
-        </div>
-      </section>
-      {deliveryPass && (
-        <section className="deliveryPassBanner">
-          <div>
-            <strong>{deliveryPass.product.name}</strong>
-            <span>{money(deliveryPass.product.price)} for 12 months</span>
-          </div>
-          <button type="button" disabled={busy} onClick={() => void startDeliveryPass()}>Buy Delivery Pass</button>
-        </section>
-      )}
-      <div className="layout">
-        <section>
-          <input aria-label="Search products" placeholder="Search products…" value={search} onChange={event => setSearch(event.target.value)} />
-          <div className="sectionTitle">
-            <h2>Available products</h2>
-            <span>{products.length} items</span>
-          </div>
-          <div className="grid">
-            {products.map(product => (
-              <article key={product.id}>
-                <div className="image">{String(product.brand ?? 'Sobeys').slice(0, 1)}</div>
-                <span className="brand">{String(product.brand ?? 'Grocery')}</span>
-                <h3>{product.name}</h3>
-                <p className="sku">SKU {product.sku}</p>
-                {product.offers?.map(offer => <div className="offerBadge" key={offer.id}>{offer.label}</div>)}
-                <div className="productFooter">
-                  <strong>{money(product.price)}</strong>
-                  {lineFor(product) ? (
-                    <div className="qtyStepper">
-                      <button type="button" disabled={busy} onClick={() => void setQty(lineFor(product)!.id, lineFor(product)!.quantity - 1)}>−</button>
-                      <span>{lineFor(product)!.quantity}</span>
-                      <button type="button" disabled={busy} onClick={() => void setQty(lineFor(product)!.id, lineFor(product)!.quantity + 1)}>+</button>
-                    </div>
-                  ) : (
-                    <button disabled={!product.price || busy} onClick={() => add(product)}>Add</button>
-                  )}
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-        <aside>
-          <div className="cartHead">
-            <h2>Your cart</h2>
-            <span>{cart?.lineItems.reduce((sum, item) => sum + item.quantity, 0) ?? 0}</span>
-          </div>
-          {!cart?.lineItems.length ? (
-            <div className="empty">
-              <div>🛒</div>
-              <p>Your selected products will appear here.</p>
+       
+         {deliveryPass && (
+          <div className="deliveryPassBanner">
+            <div className="deliveryPassInfo">
+              <strong>{deliveryPass.product.name}</strong>
+              <span>{money(deliveryPass.product.price)} for 12 months</span>
             </div>
-          ) : (
-            <>
+            <button type="button" disabled={busy} onClick={() => void startDeliveryPass()}>Buy Delivery Pass</button>
+          </div>
+        )}
+       </div>
+        <div className="layout">
+          <section>
+            <div className="sectionTitle">
+              <h2>Available products</h2>
+              <span>{products.length} items</span>
+            </div>
+            <div className="grid">
+              {products.map(product => (
+                <article key={product.id}>
+                  <div className="image">{String(product.brand ?? 'Sobeys').slice(0, 1)}</div>
+                  <span className="brand">{String(product.brand ?? 'Grocery')}</span>
+                  <h3>{product.name}</h3>
+                  <p className="sku">SKU {product.sku}</p>
+                  {product.offers?.map(offer => <div className="offerBadge" key={offer.id}>{offer.label}</div>)}
+                  <div className="productFooter">
+                    <strong>{money(product.price)}</strong>
+                    {lineFor(product) ? (
+                      <div className="qtyStepper">
+                        <button type="button" disabled={busy} onClick={() => void setQty(lineFor(product)!.id, lineFor(product)!.quantity - 1)}>−</button>
+                        <span>{lineFor(product)!.quantity}</span>
+                        <button type="button" disabled={busy} onClick={() => void setQty(lineFor(product)!.id, lineFor(product)!.quantity + 1)}>+</button>
+                      </div>
+                    ) : (
+                      <button disabled={!product.price || busy} onClick={() => add(product)}>Add</button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+          <aside>
+            <div className="cartHead">
+              <h2>Your cart</h2>
+              <span>{cart?.lineItems.reduce((sum, item) => sum + item.quantity, 0) ?? 0}</span>
+            </div>
+            {!cart?.lineItems.length ? (
+              <div className="empty">
+                <div>🛒</div>
+                <p>Your selected products will appear here.</p>
+              </div>
+            ) : (
+              <>
+                {cart.lineItems.map(item => (
+                  <div className="cartItem" key={item.id}>
+                    <div>
+                      <strong>{item.name['en-CA'] ?? Object.values(item.name)[0]}</strong>
+                      <small>
+                        {item.variant.sku} · Qty {item.quantity}
+                      </small>
+                    </div>
+                    <span>{money(item.totalPrice)}</span>
+                  </div>
+                ))}
+                <div className="total">
+                  <span>Items</span>
+                  <strong>{money(originalItemsTotal)}</strong>
+                </div>
+                {discountRows.map(discount => (
+                  <div className="total" style={{ color: '#087b5b' }} key={discount.key}>
+                    <span>{discount.label}</span>
+                    <strong>−{money({ currencyCode: originalItemsTotal?.currencyCode ?? 'CAD', centAmount: discount.centAmount })}</strong>
+                  </div>
+                ))}
+
+                {showShippingAndTax && (
+                  <>
+                    <div className="total">
+                      <span>
+                        Shipping{selectedShipping ? ` (${selectedShipping.name})` : ''}
+                        {shippingNet > 0 ? ' (incl. tax)' : ''}
+                      </span>
+                      <strong>{money({ currencyCode: 'CAD', centAmount: shippingGross })}</strong>
+                    </div>
+                    <div className="total">
+                      <span>Item tax (calculated by commercetools)</span>
+                      <strong>{money({ currencyCode: 'CAD', centAmount: itemsTax })}</strong>
+                    </div>
+                  </>
+                )}
+
+                <div className="total">
+                  <span>Total</span>
+                  <strong>{money(displayTotal)}</strong>
+                </div>
+                {customer && (
+                  <div className="total">
+                    <span>Reward points after purchase</span>
+                    <strong>{rewardPreview > 0 ? `+${rewardPreview} points` : 'No points'}</strong>
+                  </div>
+                )}
+                {appliedDiscount && (
+                  <div className="cartItem">
+                    <div>
+                      <strong>{appliedDiscount === 'flat' ? DEMO_FLAT_CODE : DEMO_PERCENT_CODE}</strong>
+                      <small>{appliedDiscount === 'flat' ? '$25 off' : `${DEMO_PERCENT}% off`}</small>
+                    </div>
+                    <button type="button" disabled={busy} onClick={removeDiscount}>
+                      Remove
+                    </button>
+                  </div>
+                )}
+                <form onSubmit={applyDiscount} className="checkoutForm">
+                  <label>
+                    Discount code
+                    <input
+                      value={discountCode}
+                      onChange={event => setDiscountCode(event.target.value)}
+                      placeholder={`${DEMO_PERCENT_CODE} or ${DEMO_FLAT_CODE}`}
+                      autoComplete="off"
+                    />
+                  </label>
+                  <div className="checkoutActions">
+                    <button disabled={busy || !discountCode.trim()} type="submit">
+                      {appliedDiscount ? 'Replace discount' : 'Apply code'}
+                    </button>
+                  </div>
+                </form>
+
+                {showShippingAndTax && (
+                  <>
+                    {(listedShipping?.centAmount ?? 0) <= 0 && !freeShippingApplied ? (
+                      <p className="status">No shipping charge</p>
+                    ) : freeShippingApplied ? (
+                      <div className="cartItem">
+                        <div>
+                          <strong>{DEMO_FREE_SHIP_CODE}</strong>
+                          <small>Shipping $0.00</small>
+                        </div>
+                        <button type="button" disabled={busy} onClick={removeFreeShipping}>
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <form
+                        className="checkoutForm"
+                        onSubmit={event => {
+                          event.preventDefault();
+                          void applyFreeShipping();
+                        }}
+                      >
+                        <label>
+                          Free shipping code
+                          <input
+                            value={freeShippingCode}
+                            onChange={event => setFreeShippingCode(event.target.value)}
+                            placeholder={DEMO_FREE_SHIP_CODE}
+                            autoComplete="off"
+                          />
+                        </label>
+                        <div className="checkoutActions">
+                          <button disabled={busy || !freeShippingCode.trim()} type="submit">
+                            Apply code
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                  </>
+                )}
+
+                <button className="checkoutButton" disabled={busy} onClick={() => setShowCheckout(true)}>
+                  Checkout
+                </button>
+              </>
+            )}
+          </aside>
+        </div>
+        {showCheckout && cart && (
+          <section className="checkoutPanel">
+            <h2>Checkout</h2>
+            <p>Enter your delivery address. Billing uses the same address for this demo.</p>
+            <form onSubmit={saveAddress} className="checkoutForm">
+              <label>
+                Email
+                <input type="email" required value={email} onChange={event => setEmail(event.target.value)} />
+              </label>
+              <label>
+                First name
+                <input required value={address.firstName} onChange={event => updateAddress('firstName', event.target.value)} />
+              </label>
+              <label>
+                Last name
+                <input required value={address.lastName} onChange={event => updateAddress('lastName', event.target.value)} />
+              </label>
+              <label>
+                Street address
+                <input required value={address.streetName} onChange={event => updateAddress('streetName', event.target.value)} />
+              </label>
+              <label>
+                City
+                <input required value={address.city} onChange={event => updateAddress('city', event.target.value)} />
+              </label>
+              <label>
+                Province
+                <input required placeholder="ON" value={address.state} onChange={event => updateAddress('state', event.target.value)} />
+              </label>
+              <label>
+                Postal code
+                <input required placeholder="M5V 1A1" value={address.postalCode} onChange={event => updateAddress('postalCode', event.target.value)} />
+              </label>
+              <div className="checkoutActions">
+                <button disabled={busy} type="submit">
+                  Save address and find delivery
+                </button>
+              </div>
+            </form>
+            {shippingMethods.length > 0 && (
+              <div className="shippingChoice">
+                <label>
+                  Delivery method
+                  <select
+                    value={shippingMethodId}
+                    onChange={event => {
+                      const methodId = event.target.value;
+                      setBusy(true);
+                      selectShipping(methodId)
+                        .then(() => setStatus('Shipping added to total.'))
+                        .catch(error => setStatus((error as Error).message))
+                        .finally(() => setBusy(false));
+                    }}
+                  >
+                    {shippingMethods.map(method => (
+                      <option key={method.id} value={method.id}>
+                        {method.name}
+                        {method.price ? ` — ${money(method.price)}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button disabled={busy || !shippingMethodId} onClick={pay}>
+                  Continue to payment
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+        {showPassCheckout && (
+          <section className="checkoutPanel">
+            <h2>Delivery Pass address</h2>
+            <form onSubmit={saveDeliveryPassAddress} className="checkoutForm">
+              <label>Email<input type="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
+              <label>First name<input required value={address.firstName} onChange={event => updateAddress('firstName', event.target.value)} /></label>
+              <label>Last name<input required value={address.lastName} onChange={event => updateAddress('lastName', event.target.value)} /></label>
+              <label>Street address<input required value={address.streetName} onChange={event => updateAddress('streetName', event.target.value)} /></label>
+              <label>City<input required value={address.city} onChange={event => updateAddress('city', event.target.value)} /></label>
+              <label>Province<input required placeholder="ON" value={address.state} onChange={event => updateAddress('state', event.target.value)} /></label>
+              <label>Postal code<input required value={address.postalCode} onChange={event => updateAddress('postalCode', event.target.value)} /></label>
+              <button disabled={busy} type="submit">Continue to Delivery Pass payment</button>
+            </form>
+          </section>
+        )}
+
+        {orderPlaced && cart && orderDetails && (
+          <section className="thankYouPanel" style={{ marginTop: '2rem', padding: '1.5rem', border: '1px solid #e0e0e0', borderRadius: '8px', background: '#fafafa' }}>
+          <center> <div>
+              <h2 style={{ color: '#2e7d32', margin: '0 0 0.5rem' }}>Thank You!</h2>
+              <p>Your order has been placed successfully.</p>
+            </div></center>
+
+            <div style={{ margin: '1.5rem 0' }}>
+              <h3>Order Summary</h3>
+
               {cart.lineItems.map(item => (
-                <div className="cartItem" key={item.id}>
+                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
                   <div>
                     <strong>{item.name['en-CA'] ?? Object.values(item.name)[0]}</strong>
-                    <small>
-                      {item.variant.sku} · Qty {item.quantity}
-                    </small>
+                    <small> · Qty {item.quantity}</small>
                   </div>
                   <span>{money(item.totalPrice)}</span>
                 </div>
               ))}
-              <div className="total">
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
                 <span>Items</span>
                 <strong>{money(originalItemsTotal)}</strong>
               </div>
               {discountRows.map(discount => (
-                <div className="total" style={{ color: '#087b5b' }} key={discount.key}>
+                <div key={discount.key} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee', color: '#087b5b' }}>
                   <span>{discount.label}</span>
                   <strong>−{money({ currencyCode: originalItemsTotal?.currencyCode ?? 'CAD', centAmount: discount.centAmount })}</strong>
                 </div>
               ))}
 
-              {showShippingAndTax && (
-                <>
-                  <div className="total">
-                    <span>
-                      Shipping{selectedShipping ? ` (${selectedShipping.name})` : ''}
-                      {shippingNet > 0 ? ' (incl. tax)' : ''}
-                    </span>
-                    <strong>{money({ currencyCode: 'CAD', centAmount: shippingGross })}</strong>
-                  </div>
-                  <div className="total">
-                    <span>Item tax (calculated by commercetools)</span>
-                    <strong>{money({ currencyCode: 'CAD', centAmount: itemsTax })}</strong>
-                  </div>
-                </>
-              )}
-
-              <div className="total">
-                <span>Total</span>
-                <strong>{money(displayTotal)}</strong>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
+                <span>Shipping {orderDetails.shippingName ? `(${orderDetails.shippingName})` : ''} (incl. tax)</span>
+                <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.shippingGross })}</strong>
               </div>
-              {customer && (
-                <div className="total">
-                  <span>Reward points after purchase</span>
-                  <strong>{rewardPreview > 0 ? `+${rewardPreview} points` : 'No points'}</strong>
-                </div>
-              )}
-              {appliedDiscount && (
-                <div className="cartItem">
-                  <div>
-                    <strong>{appliedDiscount === 'flat' ? DEMO_FLAT_CODE : DEMO_PERCENT_CODE}</strong>
-                    <small>{appliedDiscount === 'flat' ? '$25 off' : `${DEMO_PERCENT}% off`}</small>
-                  </div>
-                  <button type="button" disabled={busy} onClick={removeDiscount}>
-                    Remove
-                  </button>
-                </div>
-              )}
-              <form onSubmit={applyDiscount} className="checkoutForm">
-                <label>
-                  Discount code
-                  <input
-                    value={discountCode}
-                    onChange={event => setDiscountCode(event.target.value)}
-                    placeholder={`${DEMO_PERCENT_CODE} or ${DEMO_FLAT_CODE}`}
-                    autoComplete="off"
-                  />
-                </label>
-                <div className="checkoutActions">
-                  <button disabled={busy || !discountCode.trim()} type="submit">
-                    {appliedDiscount ? 'Replace discount' : 'Apply code'}
-                  </button>
-                </div>
-              </form>
 
-              {showShippingAndTax && (
-                <>
-                  {(listedShipping?.centAmount ?? 0) <= 0 && !freeShippingApplied ? (
-                    <p className="status">No shipping charge</p>
-                  ) : freeShippingApplied ? (
-                    <div className="cartItem">
-                      <div>
-                        <strong>{DEMO_FREE_SHIP_CODE}</strong>
-                        <small>Shipping $0.00</small>
-                      </div>
-                      <button type="button" disabled={busy} onClick={removeFreeShipping}>
-                        Remove
-                      </button>
-                    </div>
-                  ) : (
-                    <form
-                      className="checkoutForm"
-                      onSubmit={event => {
-                        event.preventDefault();
-                        void applyFreeShipping();
-                      }}
-                    >
-                      <label>
-                        Free shipping code
-                        <input
-                          value={freeShippingCode}
-                          onChange={event => setFreeShippingCode(event.target.value)}
-                          placeholder={DEMO_FREE_SHIP_CODE}
-                          autoComplete="off"
-                        />
-                      </label>
-                      <div className="checkoutActions">
-                        <button disabled={busy || !freeShippingCode.trim()} type="submit">
-                          Apply code
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                </>
-              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
+                <span>Item tax (calculated by commercetools)</span>
+                <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.itemsTax })}</strong>
+              </div>
 
-              <button className="checkoutButton" disabled={busy} onClick={() => setShowCheckout(true)}>
-                Checkout
-              </button>
-            </>
-          )}
-        </aside>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', fontWeight: 'bold', fontSize: '1.1rem' }}>
+                <span>Total Paid</span>
+                <strong>{money(orderDetails.displayTotal)}</strong>
+              </div>
+            </div>
+
+            {(email || customer?.email) && (
+              <p>A confirmation email will be sent to <strong>{email || customer?.email}</strong></p>
+            )}
+
+          <center> <button
+              onClick={() => {
+                setOrderPlaced(false);
+                setOrderDetails(undefined);
+                setCart(undefined);
+                setShowCheckout(false);
+                setShippingMethods([]);
+                setShippingMethodId('');
+              }}
+              style={{ marginTop: '1rem' }}
+            >
+              Continue Shopping
+            </button>
+            </center>
+          </section>
+        )}
       </div>
-      {showCheckout && cart && (
-        <section className="checkoutPanel">
-          <h2>Checkout</h2>
-          <p>Enter your delivery address. Billing uses the same address for this demo.</p>
-          <form onSubmit={saveAddress} className="checkoutForm">
-            <label>
-              Email
-              <input type="email" required value={email} onChange={event => setEmail(event.target.value)} />
-            </label>
-            <label>
-              First name
-              <input required value={address.firstName} onChange={event => updateAddress('firstName', event.target.value)} />
-            </label>
-            <label>
-              Last name
-              <input required value={address.lastName} onChange={event => updateAddress('lastName', event.target.value)} />
-            </label>
-            <label>
-              Street address
-              <input required value={address.streetName} onChange={event => updateAddress('streetName', event.target.value)} />
-            </label>
-            <label>
-              City
-              <input required value={address.city} onChange={event => updateAddress('city', event.target.value)} />
-            </label>
-            <label>
-              Province
-              <input required placeholder="ON" value={address.state} onChange={event => updateAddress('state', event.target.value)} />
-            </label>
-            <label>
-              Postal code
-              <input required placeholder="M5V 1A1" value={address.postalCode} onChange={event => updateAddress('postalCode', event.target.value)} />
-            </label>
-            <div className="checkoutActions">
-              <button disabled={busy} type="submit">
-                Save address and find delivery
-              </button>
-            </div>
-          </form>
-          {shippingMethods.length > 0 && (
-            <div className="shippingChoice">
-              <label>
-                Delivery method
-                <select
-                  value={shippingMethodId}
-                  onChange={event => {
-                    const methodId = event.target.value;
-                    setBusy(true);
-                    selectShipping(methodId)
-                      .then(() => setStatus('Shipping added to total.'))
-                      .catch(error => setStatus((error as Error).message))
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  {shippingMethods.map(method => (
-                    <option key={method.id} value={method.id}>
-                      {method.name}
-                      {method.price ? ` — ${money(method.price)}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button disabled={busy || !shippingMethodId} onClick={pay}>
-                Continue to payment
-              </button>
-            </div>
-          )}
-        </section>
-      )}
-      {showPassCheckout && (
-        <section className="checkoutPanel">
-          <h2>Delivery Pass address</h2>
-          <form onSubmit={saveDeliveryPassAddress} className="checkoutForm">
-            <label>Email<input type="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
-            <label>First name<input required value={address.firstName} onChange={event => updateAddress('firstName', event.target.value)} /></label>
-            <label>Last name<input required value={address.lastName} onChange={event => updateAddress('lastName', event.target.value)} /></label>
-            <label>Street address<input required value={address.streetName} onChange={event => updateAddress('streetName', event.target.value)} /></label>
-            <label>City<input required value={address.city} onChange={event => updateAddress('city', event.target.value)} /></label>
-            <label>Province<input required placeholder="ON" value={address.state} onChange={event => updateAddress('state', event.target.value)} /></label>
-            <label>Postal code<input required value={address.postalCode} onChange={event => updateAddress('postalCode', event.target.value)} /></label>
-            <button disabled={busy} type="submit">Continue to Delivery Pass payment</button>
-          </form>
-        </section>
-      )}
-
-      {orderPlaced && cart && orderDetails && (
-        <section className="thankYouPanel" style={{ marginTop: '2rem', padding: '1.5rem', border: '1px solid #e0e0e0', borderRadius: '8px', background: '#fafafa' }}>
-         <center> <div>
-            <h2 style={{ color: '#2e7d32', margin: '0 0 0.5rem' }}>Thank You!</h2>
-            <p>Your order has been placed successfully.</p>
-          </div></center>
-
-          <div style={{ margin: '1.5rem 0' }}>
-            <h3>Order Summary</h3>
-
-            {cart.lineItems.map(item => (
-              <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-                <div>
-                  <strong>{item.name['en-CA'] ?? Object.values(item.name)[0]}</strong>
-                  <small> · Qty {item.quantity}</small>
-                </div>
-                <span>{money(item.totalPrice)}</span>
-              </div>
-            ))}
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-              <span>Items</span>
-              <strong>{money(originalItemsTotal)}</strong>
-            </div>
-            {discountRows.map(discount => (
-              <div key={discount.key} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee', color: '#087b5b' }}>
-                <span>{discount.label}</span>
-                <strong>−{money({ currencyCode: originalItemsTotal?.currencyCode ?? 'CAD', centAmount: discount.centAmount })}</strong>
-              </div>
-            ))}
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-              <span>Shipping {orderDetails.shippingName ? `(${orderDetails.shippingName})` : ''} (incl. tax)</span>
-              <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.shippingGross })}</strong>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #eee' }}>
-              <span>Item tax (calculated by commercetools)</span>
-              <strong>{money({ currencyCode: 'CAD', centAmount: orderDetails.itemsTax })}</strong>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', fontWeight: 'bold', fontSize: '1.1rem' }}>
-              <span>Total Paid</span>
-              <strong>{money(orderDetails.displayTotal)}</strong>
-            </div>
+      <div className='footer'>
+        <div className='container d-flex justify-content-between align-items-center sm-flex-direction-column'>
+          <div className='copyright'>
+            <p>© 2024 Sobeys Inc. All rights reserved.</p>
           </div>
-
-          {(email || customer?.email) && (
-            <p>A confirmation email will be sent to <strong>{email || customer?.email}</strong></p>
-          )}
-
-         <center> <button
-            onClick={() => {
-              setOrderPlaced(false);
-              setOrderDetails(undefined);
-              setCart(undefined);
-              setShowCheckout(false);
-              setShippingMethods([]);
-              setShippingMethodId('');
-            }}
-            style={{ marginTop: '1rem' }}
-          >
-            Continue Shopping
-          </button>
-          </center>
-        </section>
-      )}
+          <ul className='footerNavlist'><li><a target="_self"  aria-label="Privacy" href="/privacy-policy">Privacy</a></li><li ><a target="_self"  aria-label="Terms of Use" href="/terms-and-conditions">Terms of Use</a></li><li ><a target="_self"  aria-label="Accessibility" href="/accessibility">Accessibility</a></li></ul>
+        </div>
+      </div>
     </main>
   );
 }
