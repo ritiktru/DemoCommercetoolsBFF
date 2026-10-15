@@ -1028,7 +1028,7 @@ export default function Home() {
       <div className='footer'>
         <div className='container d-flex justify-content-between align-items-center sm-flex-direction-column'>
           <div className='copyright'>
-            <p>© 2024 Sobeys Inc. All rights reserved.</p>
+            <p>© 2026 Sobeys Inc. All rights reserved.</p>
           </div>
           <ul className='footerNavlist'><li><a target="_self"  aria-label="Privacy" href="/privacy-policy">Privacy</a></li><li ><a target="_self"  aria-label="Terms of Use" href="/terms-and-conditions">Terms of Use</a></li><li ><a target="_self"  aria-label="Accessibility" href="/accessibility">Accessibility</a></li></ul>
         </div>
