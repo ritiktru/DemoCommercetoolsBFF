@@ -33,6 +33,8 @@ const schema = z.object({
   // POC: payment-status reports "paid" this long after the first poll, standing in for the webhook.
   PAYMENT_SIMULATED_DELAY_MS: z.preprocess(blank, z.coerce.number().int().min(0).default(8000)),
   PAYMENT_STORE_PATH: z.preprocess(blank, z.string().default('data/transactions.json')),
+  // Protects the payment admin endpoints (capture, refund, cancel). Without it they answer 503.
+  ADMIN_API_KEY: z.preprocess(blank, z.string().min(16).optional()),
 });
 export type Config = z.infer<typeof schema>;
 export function loadConfig(env: NodeJS.ProcessEnv): Config {

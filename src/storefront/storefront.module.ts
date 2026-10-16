@@ -112,9 +112,24 @@ export class PaymentWebhookController {
   constructor(@Inject(SERVICE) private readonly storefront: StorefrontService) {}
   @Post('webhook') @HttpCode(200) webhook(@Body() body: unknown) { return this.storefront.handlePaymentWebhook(body); }
 }
+// Payment admin for the orders page: every call needs the X-Admin-Key header (ADMIN_API_KEY).
+@Controller('api/admin/payments')
+export class PaymentAdminController {
+  constructor(@Inject(SERVICE) private readonly storefront: StorefrontService) {}
+  @Get() list(@Req() req: Request) { return this.storefront.listPayments(req.header('x-admin-key')); }
+  @Post(':paymentRef/:action') @HttpCode(200) @UseGuards(OriginGuard)
+  modify(@Param('paymentRef') ref: string, @Param('action') action: string, @Body() body: unknown, @Req() req: Request) {
+    const paymentRef = z.string().regex(/^PAY-[0-9a-f-]{36}$/).safeParse(ref);
+    const type = ({ capture: 'CAPTURE', refund: 'REFUND', cancel: 'CANCEL' } as const)[action as 'capture'];
+    const input = z.strictObject({ amount: z.number().int().positive().optional() }).safeParse(body ?? {});
+    if (!paymentRef.success || !type) throw new CommerceError(404, 'NotFound', 'Not found');
+    if (!input.success) throw new CommerceError(400, 'InvalidInput', 'Provide an optional whole amount in minor units');
+    return this.storefront.modifyPayment(req.header('x-admin-key'), paymentRef.data, type, input.data.amount);
+  }
+}
 @Module({})
 export class StorefrontModule {
   static register(service: StorefrontService, auth: DynamicModule): DynamicModule {
-    return { module: StorefrontModule, imports: [auth], controllers: [StorefrontController, PaymentWebhookController], providers: [{ provide: SERVICE, useValue: service }] };
+    return { module: StorefrontModule, imports: [auth], controllers: [StorefrontController, PaymentWebhookController, PaymentAdminController], providers: [{ provide: SERVICE, useValue: service }] };
   }
 }

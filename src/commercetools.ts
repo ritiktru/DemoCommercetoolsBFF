@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { ClientBuilder, type TokenStore } from '@commercetools/sdk-client-v2';
-import { createApiBuilderFromCtpClient, type CartUpdateAction, type ClientResponse, type CustomerDraft } from '@commercetools/platform-sdk';
+import { createApiBuilderFromCtpClient, type CartUpdateAction, type ClientResponse, type CustomerDraft, type PaymentUpdateAction } from '@commercetools/platform-sdk';
 import type { Config } from './config.js';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { TransactionStore, validAdyenHmac, type AdyenNotificationItem, type Transaction } from './payments.js';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { TransactionStore, pspOf, validAdyenHmac, type AdyenNotificationItem, type PaymentOperation, type PaymentStatus, type Transaction } from './payments.js';
 import type { GoogleIdentity } from './google.js';
 import { cartSchema, type CartInput, type CartResult, type CartService } from './carts/cart.js';
 import type { SessionCustomer } from './sessions.js';
@@ -56,12 +56,23 @@ const CURRENCY_BY_COUNTRY: Record<string, string> = { CA: 'CAD', US: 'USD', GB: 
 const origin = (url: string) => url.replace(/\/$/, '');
 const ADYEN_CHECKOUT_URL = 'https://checkout-test.adyen.com/v71';
 const ORDER_PAYMENT_TYPE_KEY = 'internal-payment-reference-type';
+// How our payment statuses show on the commercetools Payment and its order.
+const STATUS_TEXT: Record<PaymentStatus, string> = {
+  INITIATED: 'Payment started', PENDING: 'Waiting for confirmation', AUTHORISED: 'Money held', REFUSED: 'Refused', EXPIRED: 'Expired',
+  CAPTURED: 'Money taken', CANCELLED: 'Hold released', PARTIALLY_REFUNDED: 'Partly refunded', REFUNDED: 'Refunded',
+};
+const ORDER_PAYMENT_STATE: Partial<Record<PaymentStatus, 'Pending' | 'Paid' | 'Failed'>> = {
+  AUTHORISED: 'Pending', CAPTURED: 'Paid', PARTIALLY_REFUNDED: 'Paid', REFUNDED: 'Paid', CANCELLED: 'Failed',
+};
+const CT_TRANSACTION = { CAPTURE: 'Charge', REFUND: 'Refund', CANCEL: 'CancelAuthorization' } as const;
 
 export class CommercetoolsClient implements CustomerService, CartService, StorefrontService {
   private tokenStore: TokenStore = { token: '', expirationTime: -1 };
   private readonly api;
   private readonly transactions: TransactionStore;
   private readonly ordering = new Map<string, Promise<NonNullable<Transaction['order']>>>();
+  // One capture/refund/cancel at a time per payment, so a double click cannot send two modifications.
+  private readonly modifying = new Set<string>();
   constructor(private readonly config: Config, private readonly fetcher: typeof fetch = fetch) {
     const client = new ClientBuilder()
       .withClientCredentialsFlow({
@@ -284,6 +295,7 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   }
 
   // Step 1-3: validate the cart, open an Adyen Hosted Checkout session and remember cartId -> payment_ref_id -> session.
+  // Adyen Drop-in (sessions flow): returns sessionData for the browser SDK. Card entry and 3-D Secure stay inside Adyen's iframes.
   async initiateCheckout(storeKey: string, cartId: string, customer?: SessionCustomer) {
     const { ADYEN_API_KEY, ADYEN_MERCHANT_ACCOUNT, APP_ORIGIN } = this.config;
     if (!ADYEN_API_KEY || !ADYEN_MERCHANT_ACCOUNT || !APP_ORIGIN) throw new CommerceError(503, 'PaymentNotConfigured', 'Set ADYEN_API_KEY, ADYEN_MERCHANT_ACCOUNT and APP_ORIGIN');
@@ -296,11 +308,15 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { 'X-API-Key': ADYEN_API_KEY, 'Content-Type': 'application/json', 'Idempotency-Key': paymentRefId },
       body: JSON.stringify({
-        mode: 'hosted', merchantAccount: ADYEN_MERCHANT_ACCOUNT, reference: paymentRefId,
+        mode: 'embedded', channel: 'Web', merchantAccount: ADYEN_MERCHANT_ACCOUNT, reference: paymentRefId,
         // Adyen minor units match commercetools centAmount for 2-decimal currencies (CAD, USD, EUR, GBP).
         amount: { value: total.centAmount, currency: total.currencyCode },
         countryCode: cart.country, shopperEmail: raw.customerEmail ?? raw.shippingAddress.email,
         returnUrl: `${APP_ORIGIN}/checkout?paymentRef=${paymentRefId}`,
+        // Hold only: OrderIQ (or the admin page) captures later.
+        additionalData: { manualCapture: 'true' },
+        // Saved cards live in Adyen, keyed by the commercetools customer id; guests get no saved cards.
+        ...(customer && { shopperReference: customer.id, storePaymentMethodMode: 'askForConsent', recurringProcessingModel: 'CardOnFile' }),
       }),
     }).catch((error: Error) => { console.error('[adyen] /sessions network error:', error.message, error.cause ?? ''); return undefined; });
     // Adyen errors are JSON ({ status, errorCode, message, errorType, pspReference }); anything else (e.g. a proxy page) is logged raw.
@@ -309,12 +325,11 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       let body: unknown = text.slice(0, 1000);
       try { body = JSON.parse(text); } catch { /* not JSON */ }
       console.error(`[adyen] /sessions HTTP ${response.status} pspReference=${response.headers.get('pspreference') ?? 'none'}`, body);
-      throw new CommerceError(502, `[adyen] /sessions HTTP ${response.status} pspReference=${response.headers.get('pspreference') ?? 'none'}`, JSON.stringify(body))
     }
     if (!response?.ok) throw new CommerceError(502, 'PaymentSessionFailed', 'Unable to start payment with Adyen');
-    const session = z.object({ id: z.string().min(1), url: z.url() }).parse(await response.json());
-    this.transactions.save({ cartId, payment_ref_id: paymentRefId, transaction_token: session.id, storeKey, amount: { currencyCode: total.currencyCode, centAmount: total.centAmount }, status: 'pending' });
-    return { paymentRefId, sessionId: session.id, url: session.url };
+    const session = z.object({ id: z.string().min(1), sessionData: z.string().min(1) }).parse(await response.json());
+    this.transactions.save({ cartId, payment_ref_id: paymentRefId, transaction_token: session.id, storeKey, amount: { currencyCode: total.currencyCode, centAmount: total.centAmount }, status: 'INITIATED' });
+    return { paymentRefId, sessionId: session.id, sessionData: session.sessionData };
   }
 
   // Step 5: the storefront polls this; once payment is confirmed the Order is created exactly once.
@@ -327,11 +342,12 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       if (txn.transaction_id) this.transactions.save(txn);
     }
     if (txn.order) return { status: 'paid', order: txn.order };
-    if (txn.status === 'pending') {
-      // ponytail: simulated webhook — any return from the hosted page counts as paid after the delay, even a cancel. Real fix: GET /sessions/{id}?sessionResult= or the HMAC webhook.
+    if (txn.status === 'REFUSED' || txn.status === 'EXPIRED' || txn.status === 'CANCELLED') return { status: 'failed' };
+    if (txn.status === 'INITIATED' || txn.status === 'PENDING') {
+      // ponytail: simulated AUTHORISATION webhook — any return from Drop-in counts as held after the delay, even a refusal. Real fix: the HMAC webhook (handlePaymentWebhook) or GET /sessions/{id}?sessionResult=.
       txn.firstPolledAt ??= Date.now();
       if (Date.now() - txn.firstPolledAt < this.config.PAYMENT_SIMULATED_DELAY_MS) { this.transactions.save(txn); return { status: 'pending' }; }
-      txn.status = 'paid'; this.transactions.save(txn);
+      txn.status = 'AUTHORISED'; this.transactions.save(txn);
     }
     // Concurrent polls share one order creation so the cart is never ordered twice.
     let pending = this.ordering.get(paymentRefId);
@@ -356,13 +372,17 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
   }
 
   private async createPaidOrder(txn: Transaction, customer?: SessionCustomer) {
-    const { cart } = await this.getCheckoutCart(txn.storeKey, txn.cartId, customer);
+    const { cart, raw } = await this.getCheckoutCart(txn.storeKey, txn.cartId, customer);
     const total = cart.taxedPrice?.totalGross ?? cart.totalPrice;
     if (total.centAmount !== txn.amount.centAmount || total.currencyCode !== txn.amount.currencyCode) {
       throw new CommerceError(409, 'CartChangedAfterPayment', 'The cart total changed after payment started; contact support');
     }
+    // The commercetools Payment must exist (and sit on the cart) before the order, so the order carries it.
+    const paymentId = await this.ensureCtPayment(txn);
+    const version = raw.paymentInfo?.payments.some(p => p.id === paymentId) ? cart.version
+      : cartSchema.parse(await this.postCart(txn.cartId, cart.version, [{ action: 'addPayment', payment: { typeId: 'payment', id: paymentId } }])).version;
     const order = await this.ct(this.api.orders().post({ body: {
-      id: txn.cartId, version: cart.version, orderNumber: `SO-${randomBytes(5).toString('hex').toUpperCase()}`, paymentState: 'Paid',
+      id: txn.cartId, version, orderNumber: `SO-${randomBytes(5).toString('hex').toUpperCase()}`, paymentState: 'Pending',
       custom: { type: { typeId: 'type', key: ORDER_PAYMENT_TYPE_KEY }, fields: { internal_payment_ref_id: txn.payment_ref_id } },
     } }), (status, error) =>
       status === 409 ? new CommerceError(409, 'ConcurrentModification', 'Cart changed; refresh and try again')
@@ -373,7 +393,50 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
     return txn.order;
   }
 
-  // Step 4: Adyen AUTHORISATION webhook. Not reachable on localhost; the simulated path in paymentStatus covers the POC.
+  // Creates the commercetools Payment once (key = payment_ref_id), with the hold as its Authorization transaction.
+  private async ensureCtPayment(txn: Transaction) {
+    if (txn.ct_payment_id) return txn.ct_payment_id;
+    const psp = pspOf(txn), amount = { currencyCode: txn.amount.currencyCode, centAmount: txn.amount.centAmount };
+    const fail = (status: number, error: unknown) => status === 400 && codesOf(error).includes('DuplicateField')
+      ? new CommerceError(409, 'PaymentExists', '') : new CommerceError(502, 'PaymentRecordFailed', 'Unable to record the payment in commerce');
+    const payment = await this.ct(this.api.payments().post({ body: {
+      key: txn.payment_ref_id, amountPlanned: amount, interfaceId: psp,
+      paymentMethodInfo: { paymentInterface: 'adyen', method: txn.payment_method, name: { en: txn.payment_method ?? 'Adyen' } },
+      paymentStatus: { interfaceCode: txn.status, interfaceText: STATUS_TEXT[txn.status] },
+      transactions: [{ type: 'Authorization', amount, state: 'Success', interactionId: psp, timestamp: new Date().toISOString() }],
+    } }), fail).catch(async error => {
+      // An earlier attempt created it but stopped before saving the id: reuse it.
+      if (error instanceof CommerceError && error.code === 'PaymentExists') return this.ct(this.api.payments().withKey({ key: txn.payment_ref_id }).get());
+      throw error;
+    });
+    txn.ct_payment_id = payment.id; this.transactions.save(txn);
+    return payment.id;
+  }
+
+  // Mirrors our status onto the commercetools Payment (status + transactions) and the order's paymentState.
+  // Best effort: our payments record is the source of truth; a failed update is logged, not fatal.
+  private async syncCtPayment(txn: Transaction, change?: { op: Pick<PaymentOperation, 'type' | 'pspReference' | 'amount'>; failed?: boolean }) {
+    if (txn.ct_payment_id) {
+      try {
+        const payment = await this.ct(this.api.payments().withId({ ID: txn.ct_payment_id }).get());
+        const actions: PaymentUpdateAction[] = [
+          { action: 'setStatusInterfaceCode', interfaceCode: txn.status },
+          { action: 'setStatusInterfaceText', interfaceText: STATUS_TEXT[txn.status] },
+        ];
+        const existing = change && payment.transactions.find(t => t.interactionId === change.op.pspReference);
+        if (change?.failed && existing) actions.push({ action: 'changeTransactionState', transactionId: existing.id, state: 'Failure' });
+        if (change && !change.failed && !existing) actions.push({ action: 'addTransaction', transaction: {
+          type: CT_TRANSACTION[change.op.type], interactionId: change.op.pspReference, state: 'Success', timestamp: new Date().toISOString(),
+          amount: { currencyCode: txn.amount.currencyCode, centAmount: change.op.amount ?? txn.amount.centAmount },
+        } });
+        await this.ct(this.api.payments().withId({ ID: txn.ct_payment_id }).post({ body: { version: payment.version, actions } }));
+      } catch (error) { console.error(`[commercetools] could not update payment ${txn.ct_payment_id} to ${txn.status}:`, (error as Error).message); }
+    }
+    const state = ORDER_PAYMENT_STATE[txn.status];
+    if (txn.order && state) await this.setOrderPaymentState(txn.order.id, state);
+  }
+
+  // Step 4: Adyen webhooks. Not reachable on localhost; the simulated path in paymentStatus covers AUTHORISATION for the POC.
   handlePaymentWebhook(body: unknown) {
     if (!this.config.ADYEN_HMAC_KEY) throw new CommerceError(503, 'WebhookNotConfigured', 'Set ADYEN_HMAC_KEY');
     const items = (body as { notificationItems?: Array<{ NotificationRequestItem?: AdyenNotificationItem }> })?.notificationItems?.map(i => i.NotificationRequestItem);
@@ -381,15 +444,123 @@ export class CommercetoolsClient implements CustomerService, CartService, Storef
       throw new CommerceError(401, 'InvalidSignature', 'Invalid webhook signature');
     }
     for (const item of items as AdyenNotificationItem[]) {
-      const txn = this.transactions.find(item.merchantReference);
+      // Modifications carry the reference we sent (PAY-…:CAPTURE:1); the payment's own reference is the part before ':'.
+      const txn = this.transactions.find(item.merchantReference.split(':')[0]!);
       if (!txn) continue;
-      // Every verified event is recorded; only a successful AUTHORISATION for the exact amount marks it paid.
-      const authorised = item.eventCode === 'AUTHORISATION' && item.success === 'true' &&
-        item.amount.value === txn.amount.centAmount && item.amount.currency === txn.amount.currencyCode;
-      this.transactions.save({ ...txn, eventCode: item.eventCode, payment_method: item.paymentMethod ?? txn.payment_method,
-        ...(authorised && { status: 'paid' as const, pspReference: item.pspReference }) });
+      txn.eventCode = item.eventCode; txn.payment_method = item.paymentMethod ?? txn.payment_method;
+      const ok = item.success === 'true';
+      if (item.eventCode === 'AUTHORISATION') {
+        const matches = item.amount.value === txn.amount.centAmount && item.amount.currency === txn.amount.currencyCode;
+        if ((txn.status === 'INITIATED' || txn.status === 'PENDING') && matches) {
+          Object.assign(txn, ok ? { status: 'AUTHORISED', pspReference: item.pspReference } : { status: 'REFUSED', failure_reason: item.reason });
+        }
+      } else {
+        const type = ({ CAPTURE: 'CAPTURE', CAPTURE_FAILED: 'CAPTURE', REFUND: 'REFUND', REFUND_FAILED: 'REFUND', CANCELLATION: 'CANCEL' } as const)[item.eventCode as 'CAPTURE'];
+        const failed = !ok || item.eventCode.endsWith('_FAILED');
+        const op = type && { type, pspReference: item.pspReference, amount: item.amount.value };
+        if (op && this.settleOperation(txn, op, failed, item.reason)) { this.transactions.save(txn); void this.syncCtPayment(txn, { op, failed }); }
+      }
+      this.transactions.save(txn);
     }
     return '[accepted]';
+  }
+
+  // Confirms or reverts a modification. One that Adyen reports but we never requested (e.g. made by OrderIQ) is applied once.
+  // Returns false when nothing changed (a repeat), so callers skip the commercetools update.
+  private settleOperation(txn: Transaction, op: Pick<PaymentOperation, 'type' | 'pspReference' | 'amount'>, failed: boolean, reason?: string) {
+    txn.operations ??= [];
+    const known = txn.operations.find(o => o.pspReference === op.pspReference);
+    if (known && known.status !== 'REQUESTED') return false; // repeat webhook
+    if (!known) {
+      if (failed) return false;
+      this.applyOperation(txn, op);
+      txn.operations.push({ ...op, status: 'SUCCEEDED', requestedAt: new Date().toISOString() });
+      return true;
+    }
+    known.status = failed ? 'FAILED' : 'SUCCEEDED';
+    if (!failed) return true;
+    known.reason = reason; txn.failure_reason = reason;
+    if (known.type === 'CAPTURE') Object.assign(txn, { status: 'AUTHORISED', captured_amount: 0 });
+    if (known.type === 'CANCEL') txn.status = 'AUTHORISED';
+    if (known.type === 'REFUND') { txn.refunded_amount = (txn.refunded_amount ?? 0) - (known.amount ?? 0); this.refundStatus(txn); }
+    return true;
+  }
+
+  private applyOperation(txn: Transaction, op: Pick<PaymentOperation, 'type' | 'amount'>) {
+    if (op.type === 'CAPTURE') Object.assign(txn, { status: 'CAPTURED', captured_amount: op.amount });
+    if (op.type === 'CANCEL') txn.status = 'CANCELLED';
+    if (op.type === 'REFUND') { txn.refunded_amount = (txn.refunded_amount ?? 0) + (op.amount ?? 0); this.refundStatus(txn); }
+  }
+
+  private refundStatus(txn: Transaction) {
+    const refunded = txn.refunded_amount ?? 0;
+    txn.status = refunded <= 0 ? 'CAPTURED' : refunded >= (txn.captured_amount ?? 0) ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+  }
+
+  // Payment admin (orders page). Guarded by ADMIN_API_KEY; OrderIQ will own these calls in production.
+  private requireAdmin(key: string | undefined) {
+    const expected = this.config.ADMIN_API_KEY;
+    if (!expected) throw new CommerceError(503, 'AdminNotConfigured', 'Set ADMIN_API_KEY');
+    const given = Buffer.from(key ?? ''), wanted = Buffer.from(expected);
+    if (given.length !== wanted.length || !timingSafeEqual(given, wanted)) throw new CommerceError(401, 'Unauthorized', 'Invalid admin key');
+  }
+
+  listPayments(adminKey: string | undefined) {
+    this.requireAdmin(adminKey);
+    const payments = this.transactions.list().map(t => ({
+      paymentRef: t.payment_ref_id, status: t.status, currency: t.amount.currencyCode, amount: t.amount.centAmount,
+      capturedAmount: t.captured_amount ?? 0, refundedAmount: t.refunded_amount ?? 0, paymentMethod: t.payment_method,
+      pspReference: pspOf(t), orderNumber: t.order?.orderNumber, failureReason: t.failure_reason,
+      operations: t.operations ?? [], createdAt: t.created_at, updatedAt: t.updated_at,
+    })).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+    return { payments };
+  }
+
+  async modifyPayment(adminKey: string | undefined, paymentRefId: string, type: PaymentOperation['type'], amount?: number) {
+    this.requireAdmin(adminKey);
+    const txn = this.transactions.find(paymentRefId);
+    if (!txn) throw new CommerceError(404, 'PaymentNotFound', 'Payment not found');
+    const psp = pspOf(txn);
+    if (!psp) throw new CommerceError(409, 'NoPspReference', 'Adyen has not confirmed this payment yet');
+    const captured = txn.captured_amount ?? 0, refunded = txn.refunded_amount ?? 0;
+    const allowed = type === 'REFUND' ? txn.status === 'CAPTURED' || txn.status === 'PARTIALLY_REFUNDED' : txn.status === 'AUTHORISED';
+    if (!allowed) throw new CommerceError(409, 'InvalidPaymentState', `Cannot ${type.toLowerCase()} a payment that is ${txn.status}`);
+    const value = type === 'CANCEL' ? undefined : amount ?? (type === 'CAPTURE' ? txn.amount.centAmount : captured - refunded);
+    const max = type === 'CAPTURE' ? txn.amount.centAmount : captured - refunded;
+    if (value !== undefined && (value <= 0 || value > max)) throw new CommerceError(422, 'InvalidAmount', `Amount must be between 1 and ${max}`);
+    if (this.modifying.has(paymentRefId)) throw new CommerceError(409, 'OperationInProgress', 'Another operation on this payment is in progress');
+    this.modifying.add(paymentRefId);
+    try {
+      const n = (txn.operations ?? []).filter(o => o.type === type).length + 1;
+      const reference = `${paymentRefId}:${type}:${n}`;
+      const path = { CAPTURE: 'captures', REFUND: 'refunds', CANCEL: 'cancels' }[type];
+      const response = await this.fetcher(`${ADYEN_CHECKOUT_URL}/payments/${encodeURIComponent(psp)}/${path}`, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
+        headers: { 'X-API-Key': this.config.ADYEN_API_KEY ?? '', 'Content-Type': 'application/json', 'Idempotency-Key': reference },
+        body: JSON.stringify({ merchantAccount: this.config.ADYEN_MERCHANT_ACCOUNT, reference, ...(value !== undefined && { amount: { value, currency: txn.amount.currencyCode } }) }),
+      }).catch((error: Error) => { console.error(`[adyen] ${path} network error:`, error.message, error.cause ?? ''); return undefined; });
+      const text = await response?.text().catch(() => '') ?? '';
+      if (!response?.ok) {
+        console.error(`[adyen] ${path} HTTP ${response?.status ?? 'none'}`, text.slice(0, 1000));
+        throw new CommerceError(502, 'PaymentModificationFailed', `Adyen did not accept the ${type.toLowerCase()}`);
+      }
+      // Adyen answers "received"; the outcome arrives later as a webhook, which can still revert this (settleOperation).
+      const { pspReference } = z.object({ pspReference: z.string().min(1) }).parse(JSON.parse(text));
+      const fresh = this.transactions.find(paymentRefId)!;
+      this.applyOperation(fresh, { type, amount: value });
+      (fresh.operations ??= []).push({ type, pspReference, amount: value, status: 'REQUESTED', requestedAt: new Date().toISOString() });
+      this.transactions.save(fresh);
+      await this.syncCtPayment(fresh, { op: { type, pspReference, amount: value } });
+      return this.listPayments(adminKey).payments.find(p => p.paymentRef === paymentRefId);
+    } finally { this.modifying.delete(paymentRefId); }
+  }
+
+  // Best effort: the payment record is the source of truth; a failed commercetools update is logged, not fatal.
+  private async setOrderPaymentState(orderId: string, paymentState: 'Paid' | 'Pending' | 'Failed') {
+    try {
+      const order = await this.ct(this.api.orders().withId({ ID: orderId }).get());
+      await this.ct(this.api.orders().withId({ ID: orderId }).post({ body: { version: order.version, actions: [{ action: 'changePaymentState', paymentState }] } }));
+    } catch (error) { console.error(`[commercetools] could not set order ${orderId} paymentState=${paymentState}:`, (error as Error).message); }
   }
 
   async createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer) {

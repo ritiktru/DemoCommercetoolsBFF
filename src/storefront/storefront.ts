@@ -40,5 +40,7 @@ export interface StorefrontService {
   initiateCheckout(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
   paymentStatus(storeKey: string, paymentRefId: string, sessionResult?: string, customer?: SessionCustomer): Promise<unknown>;
   handlePaymentWebhook(body: unknown): unknown;
+  listPayments(adminKey: string | undefined): unknown;
+  modifyPayment(adminKey: string | undefined, paymentRefId: string, type: 'CAPTURE' | 'REFUND' | 'CANCEL', amount?: number): Promise<unknown>;
   createCheckoutSession(storeKey: string, cartId: string, customer?: SessionCustomer): Promise<unknown>;
 }

@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import '@adyen/adyen-web/styles/adyen.css';
 import { api, money, type Money } from '../api';
 import LineItem from '../LineItem';
 import Loader from '../Loader';
@@ -33,6 +34,9 @@ export default function Checkout() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [verifying, setVerifying] = useState(false);
+  const dropinRef = useRef<HTMLDivElement>(null);
+  const dropin = useRef<{ instance: { unmount(): unknown; submit(): void }; version: number }>(undefined);
+  const [paying, setPaying] = useState(false);
 
   const base = `/api/storefront/stores/${storeKey}`;
   useEffect(() => { if (customer) setEmail(customer.email); }, [customer]);
@@ -61,15 +65,51 @@ export default function Checkout() {
     catch (error) { setMessage((error as Error).message); }
   }
 
-  // Adyen Hosted Checkout: the BFF opens a session and we leave for Adyen's page; Adyen returns to /checkout?paymentRef=…
-  async function pay() {
-    if (!cart || !methodId) return;
+  // Adyen Drop-in (sessions flow). Card fields and 3-D Secure run inside Adyen's iframes, so card data never reaches
+  // this page's code or our servers. The browser's result is not trusted: the BFF confirms it with Adyen before any order.
+  async function adyenCheckout(session: { id: string; sessionData?: string }, paymentRef: string) {
+    const clientKey = process.env.NEXT_PUBLIC_ADYEN_CLIENT_KEY;
+    if (!clientKey) throw new Error('Payments are not configured');
+    // Imported on demand: the SDK needs window, so it must not run during server rendering.
+    const { AdyenCheckout, Dropin } = await import('@adyen/adyen-web/auto');
+    const failed = (text: string) => { closeDropin(); setVerifying(false); setMessage(text); };
+    const checkout = await AdyenCheckout({
+      // ponytail: TEST environment only; going live needs 'live'/'live-us' and the live client key.
+      environment: 'test', clientKey, countryCode: cart?.country ?? 'CA', locale: 'en-CA', session,
+      onPaymentCompleted: result => {
+        const sessionResult = 'sessionResult' in result ? result.sessionResult : undefined;
+        window.location.assign(`/checkout?paymentRef=${encodeURIComponent(paymentRef)}${sessionResult ? `&sessionResult=${encodeURIComponent(sessionResult)}` : ''}`);
+      },
+      onPaymentFailed: result => failed(`Payment was not completed${result?.resultCode ? ` (${result.resultCode})` : ''}. Please try again.`),
+      onError: error => failed(error.message),
+    });
+    return { checkout, Dropin };
+  }
+
+  function closeDropin() { dropin.current?.instance.unmount(); dropin.current = undefined; setPaying(false); }
+
+  async function startPayment() {
+    if (!cart || !methodId || !dropinRef.current) return;
     setBusy(true); setMessage('');
     try {
-      const { url } = await api(`${base}/checkout/initiate`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
-      window.location.assign(url);
-    } catch (error) { setMessage((error as Error).message); setBusy(false); }
+      const { paymentRefId, sessionId, sessionData } = await api(`${base}/checkout/initiate`, { method: 'POST', body: JSON.stringify({ cartId: cart.id }) });
+      // Kept so a redirect-based method (PayPal, bank page) can be finished when the shopper comes back.
+      sessionStorage.setItem(`adyen:${paymentRefId}`, sessionId);
+      const { checkout, Dropin } = await adyenCheckout({ id: sessionId, sessionData }, paymentRefId);
+            // Saved cards (signed-in customers) are listed above the new-card form; card fields stay in Adyen's iframes.
+      // showPayButton false: our Pay button below submits whichever method is selected. Wallets keep their own button.
+      const instance = new Dropin(checkout, {
+        showPayButton: false, showStoredPaymentMethods: true, openFirstStoredPaymentMethod: true,
+        paymentMethodsConfiguration: { googlepay: { showPayButton: true }, applepay: { showPayButton: true } },
+      });
+      dropin.current = { instance: instance.mount(dropinRef.current), version: cart.version };
+      setPaying(true);
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setBusy(false); }
   }
+
+  // The session's amount is fixed: any cart change (address, delivery) closes Drop-in so a new session is started.
+  useEffect(() => { if (dropin.current && dropin.current.version !== cart?.version) closeDropin(); }, [cart?.version]);
 
   // Back from Adyen: poll until the BFF confirms payment and returns the Order (about 2s apart, up to ~2 minutes).
   useEffect(() => {
@@ -78,6 +118,16 @@ export default function Checkout() {
     const paymentRef = params.get('paymentRef'); const sessionResult = params.get('sessionResult');
     if (!paymentRef || !storeKey) return;
     setVerifying(true);
+    // Back from a redirect-based method: Drop-in finishes it with Adyen, then onPaymentCompleted returns here with sessionResult.
+    const redirectResult = params.get('redirectResult');
+    if (redirectResult) {
+      const sessionId = params.get('sessionId') ?? sessionStorage.getItem(`adyen:${paymentRef}`);
+      if (!sessionId) { setVerifying(false); setMessage('Payment session not found. Please try again.'); return; }
+      adyenCheckout({ id: sessionId }, paymentRef)
+        .then(({ checkout }) => checkout.submitDetails({ details: { redirectResult } }))
+        .catch(error => { setVerifying(false); setMessage((error as Error).message); });
+      return;
+    }
     let stopped = false;
     (async () => {
       for (let attempt = 0; attempt < 60 && !stopped; attempt++) {
@@ -119,8 +169,10 @@ export default function Checkout() {
         {methods.length > 0 && <section className="checkoutPanel"><h2>4. Delivery method</h2>
           {methods.map(method => <label className="check" key={method.id}><input type="radio" name="delivery" checked={method.id === methodId} onChange={() => chooseMethod(method.id)} /> {method.name}</label>)}</section>}
         {readyToPay && <section className="checkoutPanel"><h2>5. Payment</h2>
-          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}. You will be taken to Adyen's secure page to pay.</p>
-          <button className="checkoutButton" disabled={busy} onClick={pay}>Pay with Adyen</button></section>}
+          <p>Your order total is {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}. Payment details are entered in Adyen's secure form and never reach our servers.</p>
+          {!paying && <button className="checkoutButton" disabled={busy} onClick={startPayment}>Continue to payment</button>}
+          <div ref={dropinRef} />
+          {paying && <button className="checkoutButton" onClick={() => dropin.current?.instance.submit()}>Pay {money(cart.taxedPrice?.totalGross ?? cart.totalPrice)}</button>}</section>}
         {message && <p className="error" role="alert">{message}</p>}
       </div>
       <aside>
